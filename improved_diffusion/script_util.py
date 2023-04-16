@@ -5,7 +5,7 @@ from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel
 
-NUM_CLASSES = 1000
+NUM_CLASSES = 800
 
 
 def model_and_diffusion_defaults():
@@ -32,6 +32,7 @@ def model_and_diffusion_defaults():
         rescale_learned_sigmas=True,
         use_checkpoint=False,
         use_scale_shift_norm=True,
+        use_stroke = False
     )
 
 
@@ -55,6 +56,7 @@ def create_model_and_diffusion(
     rescale_learned_sigmas,
     use_checkpoint,
     use_scale_shift_norm,
+    use_stroke
 ):
     model = create_model(
         image_size,
@@ -68,6 +70,7 @@ def create_model_and_diffusion(
         num_heads_upsample=num_heads_upsample,
         use_scale_shift_norm=use_scale_shift_norm,
         dropout=dropout,
+        use_stroke = use_stroke
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -95,6 +98,7 @@ def create_model(
     num_heads_upsample,
     use_scale_shift_norm,
     dropout,
+    use_stroke
 ):
     if image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -122,6 +126,7 @@ def create_model(
         num_heads=num_heads,
         num_heads_upsample=num_heads_upsample,
         use_scale_shift_norm=use_scale_shift_norm,
+        use_stroke=use_stroke
     )
 
 

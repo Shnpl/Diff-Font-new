@@ -19,7 +19,7 @@ from .fp16_util import (
 )
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
-
+import time
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
@@ -116,13 +116,19 @@ class TrainLoop:
 
         if resume_checkpoint:
             self.resume_step = parse_resume_step_from_filename(resume_checkpoint)
-            if dist.get_rank() == 0:
-                logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
-                self.model.load_state_dict(
-                    dist_util.load_state_dict(
-                        resume_checkpoint, map_location=dist_util.dev()
-                    )
+            # if dist.get_rank() == 0:
+            #     logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
+            #     self.model.load_state_dict(
+            #         dist_util.load_state_dict(
+            #             resume_checkpoint, map_location=dist_util.dev()
+            #         )
+            #     )
+            logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
+            self.model.load_state_dict(
+                dist_util.load_state_dict(
+                    resume_checkpoint, map_location=dist_util.dev()
                 )
+            )
 
         dist_util.sync_params(self.model.parameters())
 
@@ -132,12 +138,17 @@ class TrainLoop:
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         ema_checkpoint = find_ema_checkpoint(main_checkpoint, self.resume_step, rate)
         if ema_checkpoint:
-            if dist.get_rank() == 0:
-                logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
-                state_dict = dist_util.load_state_dict(
-                    ema_checkpoint, map_location=dist_util.dev()
-                )
-                ema_params = self._state_dict_to_master_params(state_dict)
+            # if dist.get_rank() == 0:
+            #     logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
+            #     state_dict = dist_util.load_state_dict(
+            #         ema_checkpoint, map_location=dist_util.dev()
+            #     )
+            #     ema_params = self._state_dict_to_master_params(state_dict)
+            logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
+            state_dict = dist_util.load_state_dict(
+                ema_checkpoint, map_location=dist_util.dev()
+            )
+            ema_params = self._state_dict_to_master_params(state_dict)
 
         dist_util.sync_params(ema_params)
         return ema_params
@@ -163,10 +174,13 @@ class TrainLoop:
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
         ):
-            batch, cond = next(self.data)
-            self.run_step(batch, cond)
+            batch, cond, style_batch,*stroke = next(self.data)
+            stroke = stroke[0] if stroke != [] else None
+            # batch, cond, sty = next(self.data)
+            self.run_step(batch, cond, style_batch,stroke)
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
+                logger.info(time.asctime())
             if self.step % self.save_interval == 0:
                 self.save()
                 # Run for a finite amount of time in integration tests.
@@ -177,15 +191,15 @@ class TrainLoop:
         if (self.step - 1) % self.save_interval != 0:
             self.save()
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+    def run_step(self, batch, cond, style_batch,stroke):
+        self.forward_backward(batch, cond, style_batch,stroke)
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
         self.log_step()
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, style_batch,stroke):
         zero_grad(self.model_params)
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
@@ -193,6 +207,14 @@ class TrainLoop:
                 k: v[i : i + self.microbatch].to(dist_util.dev())
                 for k, v in cond.items()
             }
+            micro_sty = style_batch[i : i + self.microbatch].to(dist_util.dev())
+            # micro_sty = {
+            #     k: v[i : i + self.microbatch]
+            #     for k, v in sty.items()
+            # }
+            if stroke != None:
+                micro_stroke = stroke[i : i + self.microbatch].to(dist_util.dev())
+                micro_cond.update({"stroke":micro_stroke})
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
@@ -201,7 +223,8 @@ class TrainLoop:
                 self.ddp_model,
                 micro,
                 t,
-                model_kwargs=micro_cond,
+                micro_sty,
+                model_kwargs=micro_cond
             )
 
             if last_batch or not self.use_ddp:
@@ -251,6 +274,8 @@ class TrainLoop:
     def _log_grad_norm(self):
         sqsum = 0.0
         for p in self.master_params:
+            if p.grad is None:
+                continue
             sqsum += (p.grad ** 2).sum().item()
         logger.logkv_mean("grad_norm", np.sqrt(sqsum))
 
@@ -290,6 +315,11 @@ class TrainLoop:
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
+        # with bf.BlobFile(
+        #         bf.join(get_blob_logdir(), f"opt{(self.step + self.resume_step):06d}.pt"),
+        #         "wb",
+        # ) as f:
+        #     th.save(self.opt.state_dict(), f)
 
         dist.barrier()
 

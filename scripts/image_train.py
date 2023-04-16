@@ -15,19 +15,33 @@ from improved_diffusion.script_util import (
 )
 from improved_diffusion.train_util import TrainLoop
 
+import torch
+import os
+import json
 
 def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure("./logs_20230410")
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
+    model_dict = model.state_dict()
+    pretrained_dict = torch.load("./checkpoint_latest.pth")
+    pretrained_dict = pretrained_dict['netStyleEncoder']
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if 'style_encoder.' + k in model_dict}
+    style_encoder_dict = {}
+    for k, v in pretrained_dict.items():
+        style_encoder_dict.update({'style_encoder.' + k: v})
+    model_dict.update(style_encoder_dict)
+    model.load_state_dict(model_dict)
     model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
+    for param in model.style_encoder.parameters():
+        param.requires_grad = False
 
     logger.log("creating data loader...")
     data = load_data(
@@ -35,6 +49,7 @@ def main():
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=args.class_cond,
+        use_stroke = args.use_stroke
     )
 
     logger.log("training...")
@@ -58,22 +73,11 @@ def main():
 
 
 def create_argparser():
-    defaults = dict(
-        data_dir="",
-        schedule_sampler="uniform",
-        lr=1e-4,
-        weight_decay=0.0,
-        lr_anneal_steps=0,
-        batch_size=1,
-        microbatch=-1,  # -1 disables microbatches
-        ema_rate="0.9999",  # comma-separated list of EMA values
-        log_interval=10,
-        save_interval=10000,
-        resume_checkpoint="",
-        use_fp16=False,
-        fp16_scale_growth=1e-3,
-    )
-    defaults.update(model_and_diffusion_defaults())
+    defaults = model_and_diffusion_defaults()
+    with open("logs_20230410/train_param.json",'r') as f:
+        modified = json.load(f)
+    defaults.update(modified)
+    defaults["class_cond"] = True
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
