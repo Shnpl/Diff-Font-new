@@ -41,10 +41,12 @@ def main():
     model.to(dist_util.dev())
     model.eval()
 
-
+    with open('datasets/CFG/seen_characters.json','r') as f:
+        char_800 = json.load(f)
     class_names = []
     for file in [bf.basename(namepath).split("_")[0] for namepath in bf.listdir(args.style_path)]:
-        class_names.append(file)
+        if file.split('.')[0] in char_800:
+            class_names.append(file)
 
     sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
 
@@ -101,7 +103,7 @@ def main():
             # classes = th.randint(
             #     low=0, high=400, size=(args.batch_size,), device=dist_util.dev()
             # )
-            classes = th.tensor(range(128),device=dist_util.dev())
+            classes = th.tensor(range(args.batch_size),device=dist_util.dev())
             #classes = th.tensor(np.array([5209,4777,218,1964,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31])).to(dist_util.dev())
             for index in classes:
                 for key, value in sorted_classes.items():
@@ -205,27 +207,9 @@ def main():
 
 
 def create_argparser():
-
-        
-        
-        
-        
-    defaults=model_and_diffusion_defaults()     
-    modified = dict(
-        use_stroke = True,
-        noise_schedule="cosine",
-        diffusion_steps=1000,
-        num_res_blocks=3,
-        class_cond = True,
-        clip_denoised=True,
-        num_samples=14,
-        batch_size=128,
-        use_ddim=False,
-        model_path="logs/logs_20230408_bj/model170000.pt",
-        style_path="datasets/CFG/seen_font500_800/2",
-        learn_sigma =True,
-        timestep_respacing = "128"
-    )
+    defaults=model_and_diffusion_defaults() 
+    with open ("logs/logs_20230408_bj/val_params.json","r") as f:    
+        modified = json.load(f)
     defaults.update(modified)
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)

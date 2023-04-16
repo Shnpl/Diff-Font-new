@@ -1,9 +1,7 @@
 .DS_Store
 __pycache__/
 venv
-logs
-datasets
+
 .vscode
 improved_diffusion.egg-info
 dist
-models
