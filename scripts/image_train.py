@@ -23,14 +23,14 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure("./logs_20230410")
+    logger.configure(args.path)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
     model_dict = model.state_dict()
-    pretrained_dict = torch.load("./checkpoint_latest.pth")
+    pretrained_dict = torch.load(args.pretrained_dict)
     pretrained_dict = pretrained_dict['netStyleEncoder']
     pretrained_dict = {k: v for k, v in pretrained_dict.items() if 'style_encoder.' + k in model_dict}
     style_encoder_dict = {}
@@ -74,10 +74,11 @@ def main():
 
 def create_argparser():
     defaults = model_and_diffusion_defaults()
-    with open("logs_20230410/train_param.json",'r') as f:
+    path = "logs/logs_20230416"
+    with open(os.path.join(path,'train_params.json'),'r') as f:
         modified = json.load(f)
     defaults.update(modified)
-    defaults["class_cond"] = True
+    defaults.update({"path":path})
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
