@@ -1,0 +1,24 @@
+learned_sigma = true
+batch_size = 14
+
+modified = dict(
+        data_dir = "/home/shnpl/Projects/AI_Fonts/CFG/datasets/seen_font500_800",
+        schedule_sampler="uniform",
+        lr=1e-4,
+        weight_decay=0.0,
+        lr_anneal_steps=0,
+        batch_size=14,
+        microbatch=14,  # -1 disables microbatches
+        ema_rate="0.9999",  # comma-separated list of EMA values
+        log_interval=10,
+        save_interval=10000,
+        resume_checkpoint="",
+        use_fp16=False,
+        fp16_scale_growth=1e-3,
+        class_cond = True,
+        num_res_blocks=3,
+        diffusion_steps=1000,
+        noise_schedule="cosine",
+        use_stroke = False,
+        learn_sigma = True
+    )

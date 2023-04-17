@@ -23,6 +23,7 @@ from .nn import (
     checkpoint,
 )
 
+from improved_diffusion.modules.attention import SpatialTransformer
 def gram_schmidt(x, ys):
   for y in ys:
     x = x - proj(x, y)
@@ -301,10 +302,12 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, context=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
+            elif isinstance(layer, SpatialTransformer):
+                x = layer(x, context)
             else:
                 x = layer(x)
         return x
@@ -556,7 +559,8 @@ class UNetModel(nn.Module):
         downsampling.
     :param dims: determines if the signal is 1D, 2D, or 3D.
     :param num_classes: if specified (as an int), then this model will be
-        class-conditional with `num_classes` classes.
+        class-conditional with `num_classes` classes. 
+        In font generation, this refers to the number of characters
     :param use_checkpoint: use gradient checkpointing to reduce memory usage.
     :param num_heads: the number of attention heads in each attention layer.
     """
@@ -575,12 +579,15 @@ class UNetModel(nn.Module):
         num_classes=None,
         use_checkpoint=False,
         num_heads=1,
+        num_head_channels=-1,
         num_heads_upsample=-1,
         use_scale_shift_norm=False,
-        use_stroke = False
+        use_stroke = False,
+        use_spatial_transformer=False,    # custom transformer support
+        transformer_depth=1,              # custom transformer support
     ):
         super().__init__()
-
+        
         if num_heads_upsample == -1:
             num_heads_upsample = num_heads
 
@@ -595,14 +602,26 @@ class UNetModel(nn.Module):
         self.num_classes = num_classes
         self.use_checkpoint = use_checkpoint
         self.num_heads = num_heads
+        self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
-
+        
         self.style_encoder = style_encoder_textedit_addskip()
         self.use_stroke = use_stroke
+        
+        self.use_spatial_transformer = use_spatial_transformer
+        self.transformer_depth = transformer_depth
+        if self.use_spatial_transformer:
+            if self.use_stroke:
+                self.context_dim = 3072
+                context_dim = self.context_dim
+            else:
+                self.context_dim = 2048
+                context_dim = self.context_dim
+
         # time_embed_dim = model_channels * 4
         if self.use_stroke:
             time_embed_dim = 3072
-            self.stoke_linear = nn.Sequential(
+            self.stroke_linear = nn.Sequential(
                linear(32,1024),
                SiLU(),
                linear(1024,1024),
@@ -618,8 +637,6 @@ class UNetModel(nn.Module):
 
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, 1024)
-        
-        
 
         self.input_blocks = nn.ModuleList(
             [
@@ -646,9 +663,16 @@ class UNetModel(nn.Module):
                 ]
                 ch = mult * model_channels
                 if ds in attention_resolutions:
+                    if num_head_channels == -1:
+                        dim_head = ch // num_heads
+                    else:
+                        num_heads = ch // num_head_channels
+                        dim_head = num_head_channels
                     layers.append(
-                        AttentionBlock(
-                            ch, use_checkpoint=use_checkpoint, num_heads=num_heads
+                        AttentionBlock(ch, use_checkpoint=use_checkpoint, num_heads=num_heads,) 
+                        if not use_spatial_transformer 
+                        else SpatialTransformer(
+                            ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -659,7 +683,11 @@ class UNetModel(nn.Module):
                 )
                 input_block_chans.append(ch)
                 ds *= 2
-
+        if num_head_channels == -1:
+            dim_head = ch // num_heads
+        else:
+            num_heads = ch // num_head_channels
+            dim_head = num_head_channels
         self.middle_block = TimestepEmbedSequential(
             ResBlock(
                 ch,
@@ -669,7 +697,13 @@ class UNetModel(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
-            AttentionBlock(ch, use_checkpoint=use_checkpoint, num_heads=num_heads),
+            AttentionBlock(
+                ch,
+                use_checkpoint=use_checkpoint,
+                num_heads=num_heads,
+            ) if not use_spatial_transformer else SpatialTransformer(
+                            ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
+                        ),
             ResBlock(
                 ch,
                 time_embed_dim,
@@ -701,6 +735,8 @@ class UNetModel(nn.Module):
                             ch,
                             use_checkpoint=use_checkpoint,
                             num_heads=num_heads_upsample,
+                        ) if not use_spatial_transformer else SpatialTransformer(
+                            ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         )
                     )
                 if level and i == num_res_blocks:
@@ -737,12 +773,13 @@ class UNetModel(nn.Module):
         """
         return next(self.input_blocks.parameters()).dtype
 
-    def forward(self, x, timesteps, x_sty, y=None,stroke = None):
+    def forward(self, x, timesteps, x_sty, y=None,stroke = None,context = None):
         """
         Apply the model to an input batch.
 
         :param x: an [N x C x ...] Tensor of inputs.
         :param timesteps: a 1-D batch of timesteps.
+        :param context: conditioning plugged in via crossattn
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
@@ -758,20 +795,23 @@ class UNetModel(nn.Module):
             style_emb = self.style_encoder(x_sty)[1]
             label_emb = self.label_emb(y)
             if self.use_stroke:
-                stroke_emb = self.stoke_linear(stroke)
+                stroke_emb = self.stroke_linear(stroke)
                 latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
             else:
                 latent_emb = torch.cat((label_emb, style_emb), dim=1)
-            emb = emb + latent_emb
+            if not self.use_spatial_transformer:
+                emb = emb + latent_emb
+            else:
+                context = latent_emb.unsqueeze(1)
 
         h = x.type(self.inner_dtype)
         for module in self.input_blocks:
-            h = module(h, emb)
+            h = module(h, emb,context)
             hs.append(h)
-        h = self.middle_block(h, emb)
+        h = self.middle_block(h, emb,context)
         for module in self.output_blocks:
             cat_in = th.cat([h, hs.pop()], dim=1)
-            h = module(cat_in, emb)
+            h = module(cat_in, emb,context)
         h = h.type(x.dtype)
         return self.out(h)
 

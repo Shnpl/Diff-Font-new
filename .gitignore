@@ -5,3 +5,4 @@ venv
 .vscode
 improved_diffusion.egg-info
 dist
+nohup.out

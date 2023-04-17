@@ -1,3 +1,8 @@
-*
 !.gitignore
-!README.md
+!*.json
+!*.md
+*.pt
+*.txt
+*.csv
+*.npz
+*.jpg

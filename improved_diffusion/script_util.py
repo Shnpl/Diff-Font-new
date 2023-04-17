@@ -32,7 +32,9 @@ def model_and_diffusion_defaults():
         rescale_learned_sigmas=True,
         use_checkpoint=False,
         use_scale_shift_norm=True,
-        use_stroke = False
+        use_stroke = False,
+        use_spatial_transformer = False,
+        transformer_depth = 1,
     )
 
 
@@ -56,7 +58,9 @@ def create_model_and_diffusion(
     rescale_learned_sigmas,
     use_checkpoint,
     use_scale_shift_norm,
-    use_stroke
+    use_stroke,
+    use_spatial_transformer = False,
+    transformer_depth = -1,
 ):
     model = create_model(
         image_size,
@@ -70,7 +74,9 @@ def create_model_and_diffusion(
         num_heads_upsample=num_heads_upsample,
         use_scale_shift_norm=use_scale_shift_norm,
         dropout=dropout,
-        use_stroke = use_stroke
+        use_stroke = use_stroke,
+        use_spatial_transformer = use_spatial_transformer,
+        transformer_depth = transformer_depth,
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -98,7 +104,9 @@ def create_model(
     num_heads_upsample,
     use_scale_shift_norm,
     dropout,
-    use_stroke
+    use_stroke,
+    use_spatial_transformer = False,
+    transformer_depth = -1,
 ):
     if image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -126,7 +134,9 @@ def create_model(
         num_heads=num_heads,
         num_heads_upsample=num_heads_upsample,
         use_scale_shift_norm=use_scale_shift_norm,
-        use_stroke=use_stroke
+        use_stroke=use_stroke,
+        use_spatial_transformer = use_spatial_transformer,
+        transformer_depth = transformer_depth,
     )
 
 
