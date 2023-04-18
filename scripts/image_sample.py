@@ -27,9 +27,9 @@ import json
 import math
 def main():
     args = create_argparser().parse_args()
-    path = args.model_path.split(".")[0]
+
     dist_util.setup_dist()
-    logger.configure(path)
+    logger.configure(args.path)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -208,9 +208,11 @@ def main():
 
 def create_argparser():
     defaults=model_and_diffusion_defaults() 
-    with open ("logs/logs_20230408_bj/val_params.json","r") as f:    
+    path = "logs/logs_20230416"
+    with open (os.path.join(path,'val_params.json'),"r") as f:    
         modified = json.load(f)
     defaults.update(modified)
+    defaults.update({"path":path})
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
