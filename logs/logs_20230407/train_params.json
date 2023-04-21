@@ -9,13 +9,13 @@
     "ema_rate":"0.9999",
     "log_interval":10,
     "save_interval":10000,
-    "resume_checkpoint":"/root/autodl-tmp/logs_20230408/model100000.pt",
+    "resume_checkpoint":"",
     "use_fp16":false,
     "fp16_scale_growth":1e-3,
     "class_cond" : true,
     "num_res_blocks":3,
     "diffusion_steps":1000,
     "noise_schedule":"cosine",
-    "use_stroke" : true,
+    "use_stroke" : false,
     "learn_sigma":true
 }

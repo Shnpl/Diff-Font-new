@@ -225,7 +225,7 @@ def resize_image(img, resolution):
 
     scale = resolution / min(*img.size)
     img = img.resize(
-        tuple(round(x * scale) for x in img.size), resample=Image.BICUBIC
+        tuple(round(x * scale) for x in img.size), resample=Image.Resampling.BICUBIC
     )
 
     arr = np.array(img.convert("RGB"))
