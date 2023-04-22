@@ -35,6 +35,7 @@ def model_and_diffusion_defaults():
         use_stroke = False,
         use_spatial_transformer = False,
         transformer_depth = 1,
+        use_seqential_feature = False,
     )
 
 
@@ -61,6 +62,7 @@ def create_model_and_diffusion(
     use_stroke,
     use_spatial_transformer = False,
     transformer_depth = -1,
+    use_seqential_feature = False,
 ):
     model = create_model(
         image_size,
@@ -77,6 +79,7 @@ def create_model_and_diffusion(
         use_stroke = use_stroke,
         use_spatial_transformer = use_spatial_transformer,
         transformer_depth = transformer_depth,
+        use_seqential_feature = use_seqential_feature,
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -107,6 +110,7 @@ def create_model(
     use_stroke,
     use_spatial_transformer = False,
     transformer_depth = -1,
+    use_seqential_feature = False,
 ):
     if image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -137,6 +141,7 @@ def create_model(
         use_stroke=use_stroke,
         use_spatial_transformer = use_spatial_transformer,
         transformer_depth = transformer_depth,
+        use_seqential_feature = use_seqential_feature,
     )
 
 

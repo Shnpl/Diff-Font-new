@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torch
 from torch.nn import init
 import functools
+from einops import rearrange
 
 from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .nn import (
@@ -585,6 +586,8 @@ class UNetModel(nn.Module):
         use_stroke = False,
         use_spatial_transformer=False,    # custom transformer support
         transformer_depth=1,              # custom transformer support
+        use_seqential_feature = False,
+
     ):
         super().__init__()
         
@@ -610,13 +613,19 @@ class UNetModel(nn.Module):
         
         self.use_spatial_transformer = use_spatial_transformer
         self.transformer_depth = transformer_depth
+
         if self.use_spatial_transformer:
-            if self.use_stroke:
-                self.context_dim = 3072
+            if use_seqential_feature:
+                self.use_seqential_feature = use_seqential_feature
+                self.context_dim = 1024
                 context_dim = self.context_dim
             else:
-                self.context_dim = 2048
-                context_dim = self.context_dim
+                if self.use_stroke:
+                    self.context_dim = 3072
+                    context_dim = self.context_dim
+                else:
+                    self.context_dim = 2048
+                    context_dim = self.context_dim
 
         # time_embed_dim = model_channels * 4
         if self.use_stroke:
@@ -792,17 +801,29 @@ class UNetModel(nn.Module):
 
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
-            style_emb = self.style_encoder(x_sty)[1]
-            label_emb = self.label_emb(y)
-            if self.use_stroke:
-                stroke_emb = self.stroke_linear(stroke)
-                latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
+            if self.use_seqential_feature:
+                assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"
+                style_emb = self.style_encoder(x_sty)[0]
+                style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+                label_emb = self.label_emb(y).unsqueeze(1)#[b,1,1024]
+                if self.use_stroke:
+                    stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,1024]
+                    latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
+                else:
+                    latent_emb = torch.cat((label_emb, style_emb), dim=1)
+                context = latent_emb
             else:
-                latent_emb = torch.cat((label_emb, style_emb), dim=1)
-            if not self.use_spatial_transformer:
-                emb = emb + latent_emb
-            else:
-                context = latent_emb.unsqueeze(1)
+                style_emb = self.style_encoder(x_sty)[1]
+                label_emb = self.label_emb(y)
+                if self.use_stroke:
+                    stroke_emb = self.stroke_linear(stroke)
+                    latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
+                else:
+                    latent_emb = torch.cat((label_emb, style_emb), dim=1)
+                if not self.use_spatial_transformer:
+                    emb = emb + latent_emb
+                else:
+                    context = latent_emb.unsqueeze(1)
 
         h = x.type(self.inner_dtype)
         for module in self.input_blocks:
