@@ -9,7 +9,7 @@
     "ema_rate": "0.9999",
     "log_interval": 10,
     "save_interval": 10000,
-    "resume_checkpoint": "",
+    "resume_checkpoint": "logs/logs_20230421/model020000.pt",
     "use_fp16": false,
     "fp16_scale_growth": 0.001,
     "class_cond": true,

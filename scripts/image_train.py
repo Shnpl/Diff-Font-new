@@ -74,7 +74,7 @@ def main():
 
 def create_argparser():
     defaults = model_and_diffusion_defaults()
-    path = "logs/logs_20230421"
+    path = "logs/logs_20230425"
     with open(os.path.join(path,'train_params.json'),'r') as f:
         modified = json.load(f)
     defaults.update(modified)

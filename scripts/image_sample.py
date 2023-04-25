@@ -27,9 +27,16 @@ import json
 import math
 def main():
     args = create_argparser().parse_args()
-
+    # Generate picture according to model names
+    model_name = os.path.basename(args.model_path).split(".")[:-1]
+    model_name = "".join(model_name)
+    i = 1
+    logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+str(i))
+    while os.path.exists(logger_path):
+        i += 1
+        logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+str(i))
     dist_util.setup_dist()
-    logger.configure(args.path)
+    logger.configure(logger_path)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -208,7 +215,7 @@ def main():
 
 def create_argparser():
     defaults=model_and_diffusion_defaults() 
-    path = "logs/logs_20230416"
+    path = "logs/logs_20230421"
     with open (os.path.join(path,'val_params.json'),"r") as f:    
         modified = json.load(f)
     defaults.update(modified)
