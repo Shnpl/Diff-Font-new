@@ -30,11 +30,14 @@ def main():
     # Generate picture according to model names
     model_name = os.path.basename(args.model_path).split(".")[:-1]
     model_name = "".join(model_name)
+    style_path = args.style_path.split('/')
+    style_num = style_path[-1]
+    src = style_path[-2]
     i = 1
-    logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+str(i))
+    logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+src+"_"+style_num+"_"+args.timestep_respacing+"_"+str(i))
     while os.path.exists(logger_path):
         i += 1
-        logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+str(i))
+        logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+src+"_"+style_num+"_"+args.timestep_respacing+"_"+str(i))
     dist_util.setup_dist()
     logger.configure(logger_path)
 
@@ -136,7 +139,7 @@ def main():
             
             model_kwargs["y"] = classes
             if args.use_stroke:
-                sty_stroke = th.tensor(sty_stroke).to(dist_util.dev())
+                sty_stroke = th.tensor(np.array(sty_stroke)).to(dist_util.dev())
                 model_kwargs["stroke"] = sty_stroke
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
@@ -215,7 +218,7 @@ def main():
 
 def create_argparser():
     defaults=model_and_diffusion_defaults() 
-    path = "logs/logs_20230421"
+    path = "logs/logs_20230407"
     with open (os.path.join(path,'val_params.json'),"r") as f:    
         modified = json.load(f)
     defaults.update(modified)
@@ -227,7 +230,7 @@ def create_argparser():
 def resize_image(img, resolution):
     while min(*img.size) >= 2 * resolution:
         img = img.resize(
-            tuple(x // 2 for x in img.size), resample=Image.BOX
+            tuple(x // 2 for x in img.size), resample=Image.Resampling.BOX
         )
 
     scale = resolution / min(*img.size)

@@ -613,10 +613,11 @@ class UNetModel(nn.Module):
         
         self.use_spatial_transformer = use_spatial_transformer
         self.transformer_depth = transformer_depth
-
+        self.use_seqential_feature = use_seqential_feature
+        
         if self.use_spatial_transformer:
+           
             if use_seqential_feature:
-                self.use_seqential_feature = use_seqential_feature
                 self.context_dim = 1024
                 context_dim = self.context_dim
             else:
@@ -806,14 +807,15 @@ class UNetModel(nn.Module):
                 style_emb = self.style_encoder(x_sty)[0]
                 style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
                 label_emb = self.label_emb(y).unsqueeze(1)#[b,1,1024]
-                label_emb = label_emb.repeat(1,16,1)#[b,16,1024], 在0421模型中需要注释该行
                 if self.use_stroke:
                     stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,1024]
-                    stroke_emb = stroke_emb.repeat(1,16,1)#[b,16,1024],在0421模型中需要注释该行
                     latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
+
+                    pos_emb = timestep_embedding(th.linspace(1,18,18,device=latent_emb.device), 1024)
                 else:
                     latent_emb = torch.cat((label_emb, style_emb), dim=1)
-                context = latent_emb
+                    pos_emb = timestep_embedding(th.linspace(1,17,17,device=latent_emb.device), 1024)
+                context = latent_emb + pos_emb
             else:
                 style_emb = self.style_encoder(x_sty)[1]
                 label_emb = self.label_emb(y)
