@@ -11,7 +11,7 @@ import torch
 from torch.nn import init
 import functools
 from einops import rearrange
-
+from PIL import Image
 from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .nn import (
     SiLU,
@@ -284,6 +284,112 @@ class style_encoder_textedit_addskip(nn.Module):
 
         return style_emd, h, residual_features
 
+def content_encoder_arch(ch =16,out_channel_multiplier = 1, input_nc = 3):
+    arch = {}
+    n=2
+    arch[128] = {'in_channels':   [input_nc] + [ch*item for item in  [1,2,4,8]],
+                                'out_channels' : [item * ch for item in [1,2,4,8,16]],
+                                'resolution': [64,32,16,8,4]}
+    
+    arch[256] = {'in_channels':[input_nc]+[ch*item for item in [1,2,4,8,8]],
+                                'out_channels':[item*ch for item in [1,2,4,8,8,16]],
+                                'resolution': [128,64,32,16,8,4]}
+    return arch
+
+class content_encoder(nn.Module):
+
+    def __init__(self, G_ch=64, G_wide=True, resolution=128,
+                             G_kernel_size=3, G_attn='64_32_16_8', n_classes=1000,
+                             num_G_SVs=1, num_G_SV_itrs=1, G_activation=nn.ReLU(inplace=False),
+                             SN_eps=1e-12, output_dim=1,  G_fp16=False,
+                             G_init='N02',  G_param='SN', nf_mlp = 512, nEmbedding = 256, input_nc = 3,output_nc = 3):
+        super(content_encoder, self).__init__()
+
+        self.ch = G_ch
+        # Use Wide D as in BigGAN and SA-GAN or skinny D as in SN-GAN?
+        self.G_wide = G_wide
+        # Resolution
+        self.resolution = resolution
+        # Kernel size
+        self.kernel_size = G_kernel_size
+        # Attention?
+        self.attention = G_attn
+        # Number of classes
+        self.n_classes = n_classes
+        # Activation
+        self.activation = G_activation
+        # Initialization style
+        self.init = G_init
+        # Parameterization style
+        self.G_param = G_param
+        # Epsilon for Spectral Norm?
+        self.SN_eps = SN_eps
+        # Fp16?
+        self.fp16 = G_fp16
+
+        if self.resolution == 128:
+            self.save_featrues = [0,1,2,3,4]
+        elif self.resolution == 256:
+            self.save_featrues = [0,1,2,3,4,5]
+        
+        self.out_channel_nultipiler = 1
+        self.arch = content_encoder_arch(self.ch, self.out_channel_nultipiler,input_nc)[resolution]
+
+        if self.G_param == 'SN':
+        # NOTE Channel不断增加,分辨率下降直到变成向量
+            self.which_conv = functools.partial(SNConv2d,
+                                                    kernel_size=3, padding=1,
+                                                    num_svs=num_G_SVs, num_itrs=num_G_SV_itrs,
+                                                    eps=self.SN_eps)
+            self.which_linear = functools.partial(SNLinear,
+                                                    num_svs=num_G_SVs, num_itrs=num_G_SV_itrs,
+                                                    eps=self.SN_eps)
+        self.blocks = []
+        for index in range(len(self.arch['out_channels'])):
+
+            self.blocks += [[DBlock(in_channels=self.arch['in_channels'][index],
+                                             out_channels=self.arch['out_channels'][index],
+                                             which_conv=self.which_conv,
+                                             wide=self.G_wide,
+                                             activation=self.activation,
+                                             preactivation=(index > 0),
+                                             downsample=nn.AvgPool2d(2))]]
+
+        self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
+        self.init_weights()
+        # print('____params____')
+        # for name,param in self.named_parameters():
+        #     print(name,param.size())
+        #import pdb;pdb.set_trace()
+
+
+    def init_weights(self):
+        self.param_count = 0
+        for module in self.modules():
+            if (isinstance(module, nn.Conv2d)
+                    or isinstance(module, nn.Linear)
+                    or isinstance(module, nn.Embedding)):
+                if self.init == 'ortho':
+                    init.orthogonal_(module.weight)
+                elif self.init == 'N02':
+                    init.normal_(module.weight, 0, 0.02)
+                elif self.init in ['glorot', 'xavier']:
+                    init.xavier_uniform_(module.weight)
+                else:
+                    print('Init style not recognized...')
+                self.param_count += sum([p.data.nelement() for p in module.parameters()])
+        print('Param count for D''s initialized parameters: %d' % self.param_count)
+
+    def forward(self,x):
+        h = x
+        residual_features = []
+        residual_features.append(h)
+        for index, blocklist in enumerate(self.blocks):
+            for block in blocklist:
+                h = block(h)            
+            if index in self.save_featrues[:-1]:
+                residual_features.append(h)        
+        return h,residual_features
 
 class TimestepBlock(nn.Module):
     """
@@ -578,12 +684,14 @@ class UNetModel(nn.Module):
         conv_resample=True,
         dims=2,
         num_classes=None,
+        style_avg_pool = False,
         use_checkpoint=False,
         num_heads=1,
         num_head_channels=-1,
         num_heads_upsample=-1,
         use_scale_shift_norm=False,
         use_stroke = False,
+        use_content_encoder = False,
         use_spatial_transformer=False,    # custom transformer support
         transformer_depth=1,              # custom transformer support
         use_seqential_feature = False,
@@ -603,6 +711,9 @@ class UNetModel(nn.Module):
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
         self.num_classes = num_classes
+        
+        self.style_avg_pool = style_avg_pool
+        
         self.use_checkpoint = use_checkpoint
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
@@ -611,12 +722,14 @@ class UNetModel(nn.Module):
         self.style_encoder = style_encoder_textedit_addskip()
         self.use_stroke = use_stroke
         
+        self.use_content_encoder = use_content_encoder
+
         self.use_spatial_transformer = use_spatial_transformer
         self.transformer_depth = transformer_depth
         self.use_seqential_feature = use_seqential_feature
-        
+        # Time Embedded dim and context dim
         if self.use_spatial_transformer:
-           
+            time_embed_dim = model_channels * 4
             if use_seqential_feature:
                 self.context_dim = 1024
                 context_dim = self.context_dim
@@ -627,26 +740,27 @@ class UNetModel(nn.Module):
                 else:
                     self.context_dim = 2048
                     context_dim = self.context_dim
-
-        # time_embed_dim = model_channels * 4
-        if self.use_stroke:
-            time_embed_dim = 3072
-            self.stroke_linear = nn.Sequential(
-               linear(32,1024),
-               SiLU(),
-               linear(1024,1024),
-            )
         else:
-            time_embed_dim = 2048
+            if self.use_stroke:
+                time_embed_dim = 3072
+            else:
+                time_embed_dim = 2048
 
+        if self.use_stroke:
+            self.stroke_linear = nn.Sequential(
+                linear(32,1024),
+                SiLU(),
+                linear(1024,1024),
+                )
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             SiLU(),
             linear(time_embed_dim, time_embed_dim),
         )
-
-        if self.num_classes is not None:
-            self.label_emb = nn.Embedding(num_classes, 1024)
+        if self.use_content_encoder:
+            self.content_emb = content_encoder()
+        else:
+            self.content_emb = nn.Embedding(0x9FFF-0x4E00, 1024)#Unicode
 
         self.input_blocks = nn.ModuleList(
             [
@@ -783,7 +897,7 @@ class UNetModel(nn.Module):
         """
         return next(self.input_blocks.parameters()).dtype
 
-    def forward(self, x, timesteps, x_sty, y=None,stroke = None,context = None):
+    def forward(self, x, timesteps, y=None,content_text = None,content_image=None, style_image= None, stroke = None):
         """
         Apply the model to an input batch.
 
@@ -801,33 +915,51 @@ class UNetModel(nn.Module):
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
         if self.num_classes is not None:
+            # Class-Cond
             assert y.shape == (x.shape[0],)
+        else:
+            # Class-free-Cond
+
+            # Get style_emb
             if self.use_seqential_feature:
                 assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"
-                style_emb = self.style_encoder(x_sty)[0]
-                style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
-                label_emb = self.label_emb(y).unsqueeze(1)#[b,1,1024]
-                if self.use_stroke:
-                    stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,1024]
-                    latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
-
-                    pos_emb = timestep_embedding(th.linspace(1,18,18,device=latent_emb.device), 1024)
+                if self.style_avg_pool == False:
+                    style_emb = self.style_encoder(style_image)[0]
+                    style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
                 else:
-                    latent_emb = torch.cat((label_emb, style_emb), dim=1)
-                    pos_emb = timestep_embedding(th.linspace(1,17,17,device=latent_emb.device), 1024)
+                    style_emb = self.style_encoder(style_image)[1].unsqueeze(1)
+            else:
+                style_emb = self.style_encoder(style_image)[1].unsqueeze(1)
+            
+            # Get content_emb
+            if self.use_content_encoder:
+                # image = Image.fromarray(np.uint8(np.array(content_image[0].cpu())).transpose([1,2,0]))
+                # image.save('out.png')
+                content_emb,_ = self.content_emb(content_image)#[b,1024,4,4]
+                content_emb = rearrange(content_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+            else:
+                content_emb = self.content_emb(content_text-0x4E00).unsqueeze(1)#[b,1,1024]
+
+            # Get stroke_emb
+            if self.use_stroke:
+                stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,1024]
+            
+            # Get latent_emb and context
+            if self.use_stroke:
+                latent_emb = torch.cat((content_emb, style_emb,stroke_emb), dim=1)
+            else:
+                latent_emb = torch.cat((content_emb, style_emb), dim=1)
+            latent_size = latent_emb.size()[1]
+            if self.use_seqential_feature:            
+                pos_emb = timestep_embedding(th.linspace(1,latent_size,latent_size,device=latent_emb.device), 1024)
                 context = latent_emb + pos_emb
             else:
-                style_emb = self.style_encoder(x_sty)[1]
-                label_emb = self.label_emb(y)
-                if self.use_stroke:
-                    stroke_emb = self.stroke_linear(stroke)
-                    latent_emb = torch.cat((label_emb, style_emb,stroke_emb), dim=1)
-                else:
-                    latent_emb = torch.cat((label_emb, style_emb), dim=1)
-                if not self.use_spatial_transformer:
-                    emb = emb + latent_emb
-                else:
-                    context = latent_emb.unsqueeze(1)
+                context = latent_emb
+            # How to use the cond info 
+            if not self.use_spatial_transformer:
+                emb = emb + latent_emb
+            else:
+                context = context
 
         h = x.type(self.inner_dtype)
         for module in self.input_blocks:
@@ -857,7 +989,7 @@ class UNetModel(nn.Module):
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
-            emb = emb + self.label_emb(y)
+            emb = emb + self.content_emb(y)
         result = dict(down=[], up=[])
         h = x.type(self.inner_dtype)
         for module in self.input_blocks:

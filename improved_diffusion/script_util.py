@@ -1,6 +1,8 @@
 import argparse
 import inspect
 
+import torch
+
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel
@@ -40,16 +42,8 @@ def model_and_diffusion_defaults():
 
 
 def create_model_and_diffusion(
-    image_size,
-    class_cond,
     learn_sigma,
     sigma_small,
-    num_channels,
-    num_res_blocks,
-    num_heads,
-    num_heads_upsample,
-    attention_resolutions,
-    dropout,
     diffusion_steps,
     noise_schedule,
     timestep_respacing,
@@ -57,29 +51,11 @@ def create_model_and_diffusion(
     predict_xstart,
     rescale_timesteps,
     rescale_learned_sigmas,
-    use_checkpoint,
-    use_scale_shift_norm,
-    use_stroke,
-    use_spatial_transformer = False,
-    transformer_depth = -1,
-    use_seqential_feature = False,
+    unet_config,
 ):
     model = create_model(
-        image_size,
-        num_channels,
-        num_res_blocks,
         learn_sigma=learn_sigma,
-        class_cond=class_cond,
-        use_checkpoint=use_checkpoint,
-        attention_resolutions=attention_resolutions,
-        num_heads=num_heads,
-        num_heads_upsample=num_heads_upsample,
-        use_scale_shift_norm=use_scale_shift_norm,
-        dropout=dropout,
-        use_stroke = use_stroke,
-        use_spatial_transformer = use_spatial_transformer,
-        transformer_depth = transformer_depth,
-        use_seqential_feature = use_seqential_feature,
+        **unet_config
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -101,6 +77,7 @@ def create_model(
     num_res_blocks,
     learn_sigma,
     class_cond,
+    style_avg_pool,
     use_checkpoint,
     attention_resolutions,
     num_heads,
@@ -108,9 +85,11 @@ def create_model(
     use_scale_shift_norm,
     dropout,
     use_stroke,
+    use_content_encoder= False,
     use_spatial_transformer = False,
     transformer_depth = -1,
     use_seqential_feature = False,
+    pretrained_dict = None
 ):
     if image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
@@ -125,13 +104,14 @@ def create_model(
     for res in attention_resolutions.split(","):
         attention_ds.append(image_size // int(res))
 
-    return UNetModel(
+    model = UNetModel(
         in_channels=3,
         model_channels=num_channels,
         out_channels=(3 if not learn_sigma else 6),
         num_res_blocks=num_res_blocks,
         attention_resolutions=tuple(attention_ds),
         dropout=dropout,
+        style_avg_pool=style_avg_pool,
         channel_mult=channel_mult,
         num_classes=(NUM_CLASSES if class_cond else None),
         use_checkpoint=use_checkpoint,
@@ -139,10 +119,36 @@ def create_model(
         num_heads_upsample=num_heads_upsample,
         use_scale_shift_norm=use_scale_shift_norm,
         use_stroke=use_stroke,
+        use_content_encoder = use_content_encoder,
         use_spatial_transformer = use_spatial_transformer,
         transformer_depth = transformer_depth,
         use_seqential_feature = use_seqential_feature,
     )
+    model_dict = model.state_dict()
+    pretrained_dict = torch.load(pretrained_dict)
+    # Load pretrained_style_encoder_dict
+    pretrained_style_encoder_dict = pretrained_dict['netStyleEncoder']
+    pretrained_style_encoder_dict = {k: v for k, v in pretrained_style_encoder_dict.items() if 'style_encoder.' + k in model_dict}
+    style_encoder_dict = {}
+    for k, v in pretrained_style_encoder_dict.items():
+        style_encoder_dict.update({'style_encoder.' + k: v})
+    model_dict.update(style_encoder_dict)
+    
+    #Load pretrained_content_encoder_dict
+    if use_content_encoder:
+        pretrained_content_encoder_dict = pretrained_dict["netContentEncoder"]
+        pretrained_content_encoder_dict = {k: v for k, v in pretrained_content_encoder_dict.items() if 'content_emb.' + k in model_dict}
+        content_encoder_dict = {}
+        for k, v in pretrained_content_encoder_dict.items():
+            content_encoder_dict.update({'content_emb.' + k: v})
+        model_dict.update(content_encoder_dict)
+    model.load_state_dict(model_dict)
+    for param in model.style_encoder.parameters():
+        param.requires_grad = False
+    if use_content_encoder:
+        for param in model.content_emb.parameters():
+            param.requires_grad = False
+    return model
 
 
 def sr_model_and_diffusion_defaults():

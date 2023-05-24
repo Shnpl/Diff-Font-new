@@ -8,10 +8,11 @@
     "num_samples":32,
     "batch_size":32,
     "use_ddim":false,
-    "model_path":"logs/logs_20230504/model090000.pt",
-    "style_path":"datasets/CFG/seen_font3_2000_finetune/1",
+    "model_path":"logs/logs_20230514/model050000_new.pt",
+    "style_path":"datasets/CFG/seen_font3_2000_finetune/0",
     "learn_sigma" :false,
     "use_spatial_transformer" :true,
     "transformer_depth" : 1,
-    "use_seqential_feature":true
+    "use_seqential_feature":true,
+    "timestep_respacing" : "128"
 }

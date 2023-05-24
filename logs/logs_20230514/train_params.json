@@ -1,7 +1,7 @@
 {
-    "data_dir": "datasets/CFG/seen_font500_800",
+    "data_dir": "datasets/CFG/seen_font500_gb2312",
     "schedule_sampler": "uniform",
-    "lr": 1e-6,
+    "lr": 1e-4,
     "weight_decay": 0.0,
     "lr_anneal_steps": 0,
     "batch_size": 128,
@@ -9,7 +9,7 @@
     "ema_rate": "0.9999",
     "log_interval": 10,
     "save_interval": 10000,
-    "resume_checkpoint": "logs/logs_20230504/model060000.pt",
+    "resume_checkpoint": "",
     "use_fp16": false,
     "fp16_scale_growth": 0.001,
     "class_cond": true,

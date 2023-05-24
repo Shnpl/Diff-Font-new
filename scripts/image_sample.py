@@ -25,49 +25,55 @@ from improved_diffusion.script_util import (
 
 import json
 import math
+import random
+from improved_diffusion.image_datasets import ImageDataset
 def main():
     args = create_argparser().parse_args()
     # Generate picture according to model names
-    model_name = os.path.basename(args.model_path).split(".")[:-1]
-    model_name = "".join(model_name)
-    style_path = args.style_path.split('/')
-    style_num = style_path[-1]
-    src = style_path[-2]
+    args_dict = vars(args)
+    model_name = args_dict["model_name"]
+    style_path = args_dict["data"]["style_path"]
+    style_num = style_path.split('/')[-1]
+    src = style_path.split('/')[-2]
+    # Allow it to generate result for a specific model for multiple times
     i = 1
-    logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+src+"_"+style_num+"_"+args.timestep_respacing+"_"+str(i))
+    if args_dict["model"]["params"]["timestep_respacing"] == '':
+        timestep_respacing = "f"
+    else:
+        timestep_respacing = args_dict["model"]["params"]["timestep_respacing"]
+    logger_path = os.path.join(args_dict["path"],"".join(model_name.split(".")[:-1])+"_"+src+"_"+style_num+"_"+timestep_respacing+"_"+str(i))
     while os.path.exists(logger_path):
         i += 1
-        logger_path = os.path.join(os.path.dirname(args.model_path),model_name+"_"+src+"_"+style_num+"_"+args.timestep_respacing+"_"+str(i))
+        logger_path = os.path.join(args_dict["path"],"".join(model_name.split(".")[:-1])+"_"+src+"_"+style_num+"_"+timestep_respacing+"_"+str(i))
+    # Init dist
     dist_util.setup_dist()
     logger.configure(logger_path)
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
-    )
+    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"])
     model.load_state_dict(
-        dist_util.load_state_dict(args.model_path, map_location="cpu")
+        dist_util.load_state_dict(os.path.join(args_dict["path"],model_name), map_location="cpu")
     )
     model.to(dist_util.dev())
     model.eval()
 
-    with open('datasets/CFG/seen_characters.json','r') as f:
-        char_800 = json.load(f)
-    class_names = []
-    for file in [bf.basename(namepath).split("_")[0] for namepath in bf.listdir(args.style_path)]:
-        if file.split('.')[0] in char_800:
-            class_names.append(file)
+    # with open(args.characters,'r') as f:
+    #     characters = json.load(f)
+    # content_names = []
+    # for file in [bf.basename(namepath).split("_")[0] for namepath in bf.listdir(args.style_path)]:
+    #     if file.split('.')[0] in char_800:
+    #         content_names.append(file)
 
-    sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
-
+    #sorted_classes = {x: i for i, x in enumerate(sorted(set(content_names)))}
+    available_characters_with_ext = os.listdir(style_path)
     logger.log("sampling...")
     all_images = []
-    all_labels = []
-    all_label_names = []
-    sty_image = []
-    sty_stroke = []
+    all_gt_images = []
+    all_content = []
+    all_style_images = []
+    all_strokes = []
     #
-    if args.use_stroke:
+    if args_dict["model"]["params"]["unet_config"]["use_stroke"]:
         stroke_path = "datasets/CFG/new_strokes.json"
         with open(stroke_path,'r') as f:
             strokes = json.load(f)
@@ -107,118 +113,123 @@ def main():
             ]
     #
     # TODO There's a bug if the program enters the loop for more than one time
-    while len(all_images) * args.batch_size < args.num_samples:
-        model_kwargs = {}
-        if args.class_cond:
-            # classes = th.randint(
-            #     low=0, high=400, size=(args.batch_size,), device=dist_util.dev()
-            # )
-            classes = th.tensor(range(args.batch_size),device=dist_util.dev())
-            #classes = th.tensor(np.array([5209,4777,218,1964,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31])).to(dist_util.dev())
-            for index in classes:
-                for key, value in sorted_classes.items():
-                    if int(index) == value:
-                        all_label_names.append(key)
-            
-            for imgname in all_label_names:
-                image = Image.open(os.path.join(args.style_path, imgname))
-                image.load()
-                image = resize_image(image,128)
-                sty_image.append(image.unsqueeze(0))
-                if args.use_stroke:
-                    char_strokes = strokes[imgname.split(".")[0]]
-                    stroke_count_dict = dict([(stroke_part,0) for stroke_part in stroke_part_list])
-                    for stroke in char_strokes:
-                        stroke_count_dict[stroke] += 1
-                    style_stroke_list = []
-                    for stroke in stroke_part_list:
-                        style_stroke_list.append(stroke_count_dict[stroke])
-                    sty_stroke.append(np.array(style_stroke_list,dtype=np.float32))
-            
-            sty_image = th.cat(sty_image, dim=0).to(dist_util.dev())
-            
-            model_kwargs["y"] = classes
-            if args.use_stroke:
-                sty_stroke = th.tensor(np.array(sty_stroke)).to(dist_util.dev())
-                model_kwargs["stroke"] = sty_stroke
-        sample_fn = (
-            diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
-        )
-        sample = sample_fn(
-            model,
-            sty_image,
-            (args.batch_size, 3, args.image_size, args.image_size),
-            clip_denoised=args.clip_denoised,
-            model_kwargs=model_kwargs,
-            progress=True
-        )
-        sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
-        sample = sample.permute(0, 2, 3, 1)
-        sample = sample.contiguous()
+    # while len(all_images) * args_dict["data"]["batch_size"] < args.num_samples:
+    model_kwargs = {}
+    # if args.class_cond:
+    #     pass
+        # classes = th.randint(
+        #     low=0, high=400, size=(args.batch_size,), device=dist_util.dev()
+        # )
+        #classes = th.tensor(range(args.batch_size),device=dist_util.dev())
+        #classes = th.tensor(np.array([5209,4777,218,1964,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31])).to(dist_util.dev())
+    #else:
+        # for character in characters:
+        #     for key, value in sorted_classes.items():
+        #         if int(index) == value:
+        #             all_label_names.append(key)
+    characters_to_generate_with_ext = random.sample(available_characters_with_ext,args_dict["data"]["batch_size"])
+    for character_with_ext in characters_to_generate_with_ext:
+        character = character_with_ext.split('.')[0]
+        all_content.append(ord(character))
+        # Get GT image
+        try:
+            gt_image = Image.open(os.path.join(style_path, character_with_ext))
+        except:
+            gt_image = Image.fromarray(np.zeros((256,256)))
+        all_gt_images.append(gt_image)
+        
 
-        gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        if args.class_cond:
-            gathered_labels = [
-                th.zeros_like(classes) for _ in range(dist.get_world_size())
-            ]
-            dist.all_gather(gathered_labels, classes)
-            all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
-        logger.log(f"created {len(all_images) * args.batch_size} samples")
+        # Get Style image randomly
+        style_image = random.choice(available_characters_with_ext)
+        style_image = Image.open(os.path.join(style_path, style_image))
+        style_image = resize_image(style_image,128)
+        all_style_images.append(style_image.unsqueeze(0))
+
+        # Get stroke
+        if args_dict["model"]["params"]["unet_config"]["use_stroke"]:
+            char_strokes = strokes[character]
+            stroke_count_dict = dict([(stroke_part,0) for stroke_part in stroke_part_list])
+            for stroke in char_strokes:
+                stroke_count_dict[stroke] += 1
+            char_stroke_list = []
+            for stroke in stroke_part_list:
+                char_stroke_list.append(stroke_count_dict[stroke])
+            all_strokes.append(np.array(char_stroke_list,dtype=np.float32))
+        
+    model_kwargs["content_text"] = th.tensor(all_content, dtype=th.int64).to(dist_util.dev())
+    model_kwargs["style_image"] = th.cat(all_style_images, dim=0).to(dist_util.dev())
+    if args_dict["model"]["params"]["unet_config"]["use_stroke"]:
+        model_kwargs["stroke"] = th.tensor(np.array(all_strokes)).to(dist_util.dev())
+            
+    sample_fn = (
+        diffusion.p_sample_loop if not args_dict["sampler"]["use_ddim"] else diffusion.ddim_sample_loop
+    )
+    sample = sample_fn(
+        model,
+        (args_dict["data"]["batch_size"] , 3, args_dict["model"]["params"]["unet_config"]["image_size"], args_dict["model"]["params"]["unet_config"]["image_size"]),
+        clip_denoised=args_dict["sampler"]["clip_denoised"],
+        model_kwargs=model_kwargs,
+        progress=True
+    )
+    sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
+    sample = sample.permute(0, 2, 3, 1)
+    sample = sample.contiguous()
+
+    gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+    all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+    # if args.class_cond:
+    #     gathered_labels = [
+    #         th.zeros_like(classes) for _ in range(dist.get_world_size())
+    #     ]
+    #     dist.all_gather(gathered_labels, classes)
+    #     all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
+    #logger.log(f"created {len(all_images) * args.batch_size} samples")
 
     arr = np.concatenate(all_images, axis=0)
-    arr = arr[: args.num_samples]
-    if args.class_cond:
-        label_arr = np.concatenate(all_labels, axis=0)
-        label_arr = label_arr[: args.num_samples]
+    #arr = arr[: args.num_samples]
+    # if args.class_cond:
+    #     label_arr = np.concatenate(all_labels, axis=0)
+    #     label_arr = label_arr[: args.num_samples]
     if dist.get_rank() == 0:
-        shape_str = "x".join([str(x) for x in arr.shape])
-        out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
+        #shape_str = "x".join([str(x) for x in arr.shape])
+        out_path = os.path.join(logger.get_dir())
         logger.log(f"saving to {out_path}")
-        if args.class_cond:
-            images = []
-            for i in range(args.num_samples):
-                img = Image.fromarray(arr[i])
-                images.append(img)
-            image_num = len(images)
-            width_num = 8
-            height_num = math.ceil(image_num/width_num)*2
-            target_shape = (width_num*64,height_num*64)
-            background = Image.new("RGB",target_shape,(0,0,0,))
-            location = (0,0)
-            
-            for image in images:
-                background.paste(image,location)
-                location = (location[0]+64,location[1]+0)
-                if location[0] >= 64*8:
-                    location = (0,location[1]+64*2)
-            location = (0,64)
-            for label in all_label_names:
-                label = label.split(".")[0]
-                gt_image = Image.open(os.path.join(args.style_path,label.split('.')[0]+'.png'))
-                gt_image = gt_image.resize((64,64))
-                background.paste(gt_image,location)
-                location = (location[0]+64,location[1]+0)
-                if location[0] >= 64*8:
-                    location = (0,location[1]+64*2)
-            background.save(f"{out_path.split('.')[0]}.jpg")
-                #label = all_label_names[i]
-                #label = label.split(".")[0]
-                #with open(f"{path}/{label}.jpg",'w') as f:
-                #    img.save(f)
-            np.savez(out_path, arr, label_arr)
-
-        else:
-            np.savez(out_path, arr)
-
+        # if args.class_cond:
+        #     pass
+        # else:
+        images = []
+        for i in range(args_dict["data"]["batch_size"]):
+            img = Image.fromarray(arr[i])
+            images.append(img)
+        image_num = len(images)
+        width_num = 8
+        height_num = math.ceil(image_num/width_num)*2
+        target_shape = (width_num*64,height_num*64)
+        background = Image.new("RGB",target_shape,(0,0,0,))
+        location = (0,0)
+        
+        for image in images:
+            background.paste(image,location)
+            location = (location[0]+64,location[1]+0)
+            if location[0] >= 64*8:
+                location = (0,location[1]+64*2)
+        location = (0,64)
+        for gt_image in all_gt_images:
+            gt_image = gt_image.resize((64,64))
+            background.paste(gt_image,location)
+            location = (location[0]+64,location[1]+0)
+            if location[0] >= 64*8:
+                location = (0,location[1]+64*2)
+        background.save(f"{out_path}/sample.jpg")
     dist.barrier()
     logger.log("sampling complete")
 
 
 def create_argparser():
-    defaults=model_and_diffusion_defaults() 
-    path = "logs/logs_20230407"
+    #defaults=model_and_diffusion_defaults() 
+    defaults = {}
+    path = "logs/logs_20230522"
     with open (os.path.join(path,'val_params.json'),"r") as f:    
         modified = json.load(f)
     defaults.update(modified)
@@ -249,5 +260,5 @@ def resize_image(img, resolution):
     return img
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["VISIBLE_DEVICES"] = "1"
     main()

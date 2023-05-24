@@ -45,6 +45,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        **kwargs
     ):
         self.model = model
         self.diffusion = diffusion
@@ -174,10 +175,10 @@ class TrainLoop:
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
         ):
-            batch, cond, style_batch,*stroke = next(self.data)
-            stroke = stroke[0] if stroke != [] else None
+            img_batch, cond_batch = next(self.data)
+            #stroke = stroke[0] if stroke != [] else None
             # batch, cond, sty = next(self.data)
-            self.run_step(batch, cond, style_batch,stroke)
+            self.run_step(img_batch, cond_batch)
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
                 logger.info(time.asctime())
@@ -191,30 +192,35 @@ class TrainLoop:
         if (self.step - 1) % self.save_interval != 0:
             self.save()
 
-    def run_step(self, batch, cond, style_batch,stroke):
-        self.forward_backward(batch, cond, style_batch,stroke)
+    def run_step(self, batch, cond):
+        self.forward_backward(batch, cond)
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
         self.log_step()
 
-    def forward_backward(self, batch, cond, style_batch,stroke):
+    def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
-            micro_cond = {
-                k: v[i : i + self.microbatch].to(dist_util.dev())
-                for k, v in cond.items()
-            }
-            micro_sty = style_batch[i : i + self.microbatch].to(dist_util.dev())
+            micro_cond = {}
+            for key in cond:
+                value = cond[key][i : i + self.microbatch]
+                micro_cond[key] = value.to(dist_util.dev())
+            # micro_cond = {
+            #     k: v[]
+            #     for k, v in cond.items()
+            # }
+
+            #micro_sty = style_batch[i : i + self.microbatch].to(dist_util.dev())
             # micro_sty = {
             #     k: v[i : i + self.microbatch]
             #     for k, v in sty.items()
             # }
-            if stroke != None:
-                micro_stroke = stroke[i : i + self.microbatch].to(dist_util.dev())
-                micro_cond.update({"stroke":micro_stroke})
+            # if stroke != None:
+            #     micro_stroke = stroke[i : i + self.microbatch].to(dist_util.dev())
+            #     micro_cond.update({"stroke":micro_stroke})
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
@@ -223,7 +229,6 @@ class TrainLoop:
                 self.ddp_model,
                 micro,
                 t,
-                micro_sty,
                 model_kwargs=micro_cond
             )
 
@@ -273,11 +278,13 @@ class TrainLoop:
 
     def _log_grad_norm(self):
         sqsum = 0.0
+        
         for p in self.master_params:
             if p.grad is None:
                 continue
             sqsum += (p.grad ** 2).sum().item()
         logger.logkv_mean("grad_norm", np.sqrt(sqsum))
+        print(f"grad_norm{np.sqrt(sqsum)}")
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:

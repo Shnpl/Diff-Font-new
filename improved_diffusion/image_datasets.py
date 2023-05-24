@@ -1,13 +1,15 @@
-from PIL import Image
+from PIL import Image,ImageFont,ImageDraw
+import torchvision.transforms as transforms
+
 import blobfile as bf
 from mpi4py import MPI
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 import json
-
-
+from random import Random
+import os
 def load_data(
-    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False,use_stroke = False
+    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False,microbatch = None
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -27,11 +29,17 @@ def load_data(
     """
     if not data_dir:
         raise ValueError("unspecified data directory")
-    with open('datasets/CFG/seen_characters.json', 'r', encoding='utf8') as fp:
-        json_data = json.load(fp)
-    all_files = _list_image_files_recursively(data_dir, json_data)
+    # with open('datasets/CFG/seen_characters.json', 'r', encoding='utf8') as fp:
+    #     json_data = json.load(fp)
+    #all_files = _list_image_files_recursively(data_dir, json_data)
+    all_files = []
+    secondary_dirs = os.listdir(data_dir)
+    secondary_dirs = [os.path.join(data_dir,style_dir) for style_dir in secondary_dirs]
+    for secondary_dir in secondary_dirs:
+        files = os.listdir(secondary_dir)
+        files = [os.path.join(secondary_dir,file) for file in files if os.path.splitext(file)[-1] in [".jpg", ".jpeg", ".png", ".gif"]]
+        all_files.extend(files) 
     classes = None
-    # styles = None
     if class_cond:
         # Assume classes are the first part of the filename,
         # before an underscore.
@@ -43,10 +51,7 @@ def load_data(
     #     for key, value in sorted_classes.items():
     #         if value == index:
     #             print(key)
-    if use_stroke:
-        stroke_path = "datasets/CFG/new_strokes.json"
-    else:
-        stroke_path = None
+    stroke_path = "datasets/CFG/new_strokes.json"
     dataset = ImageDataset(
         image_size,
         all_files,
@@ -86,9 +91,11 @@ class ImageDataset(Dataset):
         super().__init__()
         self.resolution = resolution
         self.local_images = image_paths[shard:][::num_shards]
-        self.local_classes = None if classes is None else classes[shard:][::num_shards]
+        #self.local_classes = None if classes is None else classes[shard:][::num_shards]
         # self.local_styles = None if styles is None else styles[shard:][::num_shards]
         self.use_stroke = False
+        self.content_ttf_path = "datasets/CFG/font_content.ttf"
+        self.transform_img = resizeKeepRatio((128,128))
         if stroke_path != None:
             self.use_stroke = True
             with open(stroke_path,'r') as f:
@@ -132,69 +139,126 @@ class ImageDataset(Dataset):
 
     def __getitem__(self, idx):
         path = self.local_images[idx]
+        img_basename = os.path.basename(path)
+        img_name = os.path.splitext(img_basename)[0]
+
         with bf.BlobFile(path, "rb") as f:
-            pil_image = Image.open(f)
-            pil_image.load()
+            img_PIL = Image.open(f)
+            img_PIL.load()
         if self.use_stroke:
-            char_strokes = self.strokes[path.split("/")[-1].split(".")[0]]
+            char_strokes = self.strokes[img_name]
             stroke_count_dict = dict([(stroke_part,0) for stroke_part in self.stroke_part_list])
             for stroke in char_strokes:
                 stroke_count_dict[stroke] += 1
-            style_stroke_list = []
+            stroke_list = []
             for stroke in self.stroke_part_list:
-                style_stroke_list.append(stroke_count_dict[stroke])
-            style_stroke_arr =  np.array(style_stroke_list,dtype=np.float32)
+                stroke_list.append(stroke_count_dict[stroke])
+            stroke_arr =  np.array(stroke_list,dtype=np.float32)
         
         # We are not on a new enough PIL to support the `reducing_gap`
         # argument, which uses BOX downsampling at powers of two first.
         # Thus, we do it by hand to improve downsample quality.
-        while min(*pil_image.size) >= 2 * self.resolution:
-            pil_image = pil_image.resize(
-                tuple(x // 2 for x in pil_image.size), resample=Image.BOX
-            )
-
-        scale = self.resolution / min(*pil_image.size)
-        pil_image = pil_image.resize(
-            tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
+        
+        scale = self.resolution / min(*img_PIL.size)
+        img_PIL = img_PIL.resize(
+            tuple(round(x * scale) for x in img_PIL.size), resample=Image.BICUBIC
         )
 
-        arr = np.array(pil_image.convert("RGB"))
+        arr = np.array(img_PIL.convert("RGB"))
         crop_y = (arr.shape[0] - self.resolution) // 2
         crop_x = (arr.shape[1] - self.resolution) // 2
         arr = arr[crop_y : crop_y + self.resolution, crop_x : crop_x + self.resolution]
         arr = arr.astype(np.float32) / 127.5 - 1
+        # Get another Image from the same style for the stlye encoder
+        current_style_path = os.path.dirname(path)
+        current_style_imgs = os.listdir(current_style_path)
+        start = 0
+        end = len(current_style_imgs)-1
+        current_style_img = current_style_imgs[Random().randint(start,end)]
 
-        with bf.BlobFile(path, "rb") as f:
-            pil_image128 = Image.open(f)
-            pil_image128.load()
+        style_path = os.path.join(current_style_path,current_style_img)
+
+        with bf.BlobFile(style_path, "rb") as f:
+            style_img_128_PIL = Image.open(f)
+            style_img_128_PIL.load()
 
         # We are not on a new enough PIL to support the `reducing_gap`
         # argument, which uses BOX downsampling at powers of two first.
         # Thus, we do it by hand to improve downsample quality.
-        while min(*pil_image128.size) >= 2 * 128:
-            pil_image128 = pil_image128.resize(
-                tuple(x // 2 for x in pil_image128.size), resample=Image.BOX
+        while min(*style_img_128_PIL.size) >= 2 * 128:
+            style_img_128_PIL = style_img_128_PIL.resize(
+                tuple(x // 2 for x in style_img_128_PIL.size), resample=Image.BOX
             )
 
-        scale = 128 / min(*pil_image128.size)
-        pil_image128 = pil_image128.resize(
-            tuple(round(x * scale) for x in pil_image128.size), resample=Image.BICUBIC
+        scale = 128 / min(*style_img_128_PIL.size)
+        style_img_128_PIL = style_img_128_PIL.resize(
+            tuple(round(x * scale) for x in style_img_128_PIL.size), resample=Image.BICUBIC
         )
 
-        arr128 = np.array(pil_image128.convert("RGB"))
-        crop_y128 = (arr128.shape[0] - 128) // 2
-        crop_x128 = (arr128.shape[1] - 128) // 2
-        arr128 = arr128[crop_y128 : crop_y128 + 128, crop_x128 : crop_x128 + 128]
-        arr128 = arr128.astype(np.float32) / 127.5 - 1
+        style_image_128_arr = np.array(style_img_128_PIL.convert("RGB"))
+        crop_y128 = (style_image_128_arr.shape[0] - 128) // 2
+        crop_x128 = (style_image_128_arr.shape[1] - 128) // 2
+        style_image_128_arr = style_image_128_arr[crop_y128 : crop_y128 + 128, crop_x128 : crop_x128 + 128]
+        style_image_128_arr = style_image_128_arr.astype(np.float32) / 127.5 - 1
 
-        out_dict = {}
-        out_sty = {}
-        if self.local_classes is not None:
-            out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
-        # if self.local_styles is not None:
-        #     out_sty["style"] = self.local_styles[idx]
-        # return np.transpose(arr, [2, 0, 1]), out_dict, out_sty
+        ##
+        # content
+        font = ImageFont.truetype(self.content_ttf_path, 80)
+        
+        try:
+            content_image_128_PIL = Image.new('RGB', (128, 128), (255, 255, 255))
+            drawBrush = ImageDraw.Draw(content_image_128_PIL)
+            drawBrush.text((0, 0), img_name, fill=(0, 0, 0), font=font)
+            content_image_128_arr = self.transform_img(content_image_128_PIL)
+
+        except:
+            raise
+        ##
+
+        context_dict = {}
+        content_unicode = ord(img_name)
+        context_dict["content_text"] = np.array(content_unicode, dtype=np.int64)
+        context_dict["content_image"] = content_image_128_arr
+        context_dict["style_image"] = np.transpose(style_image_128_arr, [2, 0, 1])
         if self.use_stroke:
-            return np.transpose(arr, [2, 0, 1]), out_dict, np.transpose(arr128, [2, 0, 1]),style_stroke_arr
+            context_dict["stroke"] = stroke_arr
+        return np.transpose(arr, [2, 0, 1]), context_dict
+
+
+class resizeKeepRatio(object):
+
+    def __init__(self, size, interpolation=Image.BILINEAR, 
+        train=False):
+
+        self.size = size
+        self.interpolation = interpolation
+        self.toTensor = transforms.ToTensor()
+        self.train = train
+
+    def __call__(self, img):
+
+        if img.mode == 'L':
+            img_result = Image.new("L", self.size, (255))
+        elif img.mode =='RGB':
+            img_result = Image.new("RGB",self.size, (255, 255, 255))
         else:
-            return np.transpose(arr, [2, 0, 1]), out_dict, np.transpose(arr128, [2, 0, 1])
+            print("Unknow image mode!")
+
+        img_w, img_h = img.size
+
+        target_h = self.size[1]
+        target_w = max(1, int(img_w * target_h / img_h))
+
+        if target_w > self.size[0]:
+            target_w = self.size[0]
+
+        img = img.resize((target_w, target_h), self.interpolation)
+        #begin = random.randint(0, self.size[0]-target_w) if self.train else int((self.size[0]-target_w)/2)
+        begin = int((self.size[0]-target_w)/2)
+
+        box = (begin, 0, begin+target_w, target_h)
+        img_result.paste(img, box)
+
+        img = self.toTensor(img_result)
+        img.sub_(0.5).div_(0.5)
+        return img

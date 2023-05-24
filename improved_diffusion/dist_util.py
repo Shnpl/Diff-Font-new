@@ -46,7 +46,9 @@ def dev():
     Get the device to use for torch.distributed.
     """
     if th.cuda.is_available():
-        return th.device(f"cuda:{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}")
+        availale_devices = os.environ['VISIBLE_DEVICES'].split(',')
+        availale_devices = [int(dev) for dev in availale_devices]
+        return th.device(f"cuda:{availale_devices[MPI.COMM_WORLD.Get_rank()]}")
     return th.device("cpu")
 
 

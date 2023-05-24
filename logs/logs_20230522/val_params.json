@@ -1,0 +1,59 @@
+{
+    
+    
+    "model_name":"model010000.pt",    
+    "sampler":
+    {
+        "use_ddim":true,
+        "clip_denoised":true
+    },
+    "model":
+    {
+        "params":
+        {
+            "diffusion_steps": 1000,
+            "noise_schedule": "cosine",
+            "learn_sigma": false,
+            "sigma_small":false,
+            "use_kl":false,
+            "predict_xstart":false,
+            "rescale_timesteps":true,
+            "rescale_learned_sigmas":true,
+            "timestep_respacing":"128",
+
+            "unet_config":
+            {
+                "image_size":64,
+                "num_channels":128,
+                "attention_resolutions":"16,8",
+                "num_res_blocks": 3,
+                "num_heads":4,
+                "num_heads_upsample":-1,
+                "use_scale_shift_norm":true,
+                "dropout":0.0,
+                "use_checkpoint":true,
+                "class_cond": false,
+                "style_avg_pool":true,
+                "use_stroke": true,
+                "use_content_encoder":false,
+                "use_spatial_transformer" :true,
+                "transformer_depth" : 1,
+                "use_seqential_feature":true,
+                "pretrained_dict":"models/CFG/checkpoint_epoch6.pth"
+            }
+        }
+    },
+    "data":
+    {
+        "batch_size": 16,
+        "data_dir": "datasets/CFG/seen_font500_800",
+        "style_path":"datasets/CFG/seen_font500_800/1"
+    }
+}
+
+    
+    
+    
+    
+    
+    

@@ -21,60 +21,38 @@ import json
 
 def main():
     args = create_argparser().parse_args()
-
+    args_dict = vars(args)
     dist_util.setup_dist()
-    logger.configure(args.path)
-
+    logger.configure(args_dict["path"])
+    
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
-    )
-    model_dict = model.state_dict()
-    pretrained_dict = torch.load(args.pretrained_dict)
-    pretrained_dict = pretrained_dict['netStyleEncoder']
-    pretrained_dict = {k: v for k, v in pretrained_dict.items() if 'style_encoder.' + k in model_dict}
-    style_encoder_dict = {}
-    for k, v in pretrained_dict.items():
-        style_encoder_dict.update({'style_encoder.' + k: v})
-    model_dict.update(style_encoder_dict)
-    model.load_state_dict(model_dict)
+    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"])
     model.to(dist_util.dev())
-    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
-    for param in model.style_encoder.parameters():
-        param.requires_grad = False
+    schedule_sampler = create_named_schedule_sampler(args_dict["model"]["schedule_sampler"], diffusion)
 
     logger.log("creating data loader...")
     data = load_data(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        image_size=args.image_size,
-        class_cond=args.class_cond,
-        use_stroke = args.use_stroke
+        image_size = args_dict["model"]["params"]["unet_config"]["image_size"],
+        **args_dict["data"]        
     )
 
     logger.log("training...")
+    del args_dict["model"]["schedule_sampler"]
     TrainLoop(
         model=model,
         diffusion=diffusion,
         data=data,
-        batch_size=args.batch_size,
-        microbatch=args.microbatch,
-        lr=args.lr,
-        ema_rate=args.ema_rate,
-        log_interval=args.log_interval,
-        save_interval=args.save_interval,
-        resume_checkpoint=args.resume_checkpoint,
-        use_fp16=args.use_fp16,
-        fp16_scale_growth=args.fp16_scale_growth,
         schedule_sampler=schedule_sampler,
-        weight_decay=args.weight_decay,
-        lr_anneal_steps=args.lr_anneal_steps,
+        **args_dict["model"],
+        **args_dict["data"]
+
     ).run_loop()
 
 
 def create_argparser():
-    defaults = model_and_diffusion_defaults()
-    path = "logs/logs_20230504"
+    #defaults = model_and_diffusion_defaults()
+    defaults = {}
+    path = "logs/logs_20230522"
     with open(os.path.join(path,'train_params.json'),'r') as f:
         modified = json.load(f)
     defaults.update(modified)
@@ -85,4 +63,5 @@ def create_argparser():
 
 
 if __name__ == "__main__":
+    os.environ["VISIBLE_DEVICES"] = "0"
     main()
