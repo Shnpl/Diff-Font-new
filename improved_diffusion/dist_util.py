@@ -13,7 +13,7 @@ import torch.distributed as dist
 
 # Change this to reflect your cluster layout.
 # The GPU for a given rank is (rank % GPUS_PER_NODE).
-GPUS_PER_NODE = 8
+GPUS_PER_NODE = 2
 
 SETUP_RETRY_COUNT = 3
 
@@ -46,9 +46,7 @@ def dev():
     Get the device to use for torch.distributed.
     """
     if th.cuda.is_available():
-        availale_devices = os.environ['VISIBLE_DEVICES'].split(',')
-        availale_devices = [int(dev) for dev in availale_devices]
-        return th.device(f"cuda:{availale_devices[MPI.COMM_WORLD.Get_rank()]}")
+        return th.device(f"cuda:{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}")
     return th.device("cpu")
 
 
@@ -56,13 +54,13 @@ def load_state_dict(path, **kwargs):
     """
     Load a PyTorch file without redundant fetches across MPI ranks.
     """
-    # if MPI.COMM_WORLD.Get_rank() == 0:
-    with bf.BlobFile(path, "rb") as f:
-        data = f.read()
-    # else:
-    #     data = None
+    if MPI.COMM_WORLD.Get_rank() == 0:
+        with bf.BlobFile(path, "rb") as f:
+            data = f.read()
+    else:
+        data = None
     
-    #data = MPI.COMM_WORLD.bcast(data)
+    data = MPI.COMM_WORLD.bcast(data)
     return th.load(io.BytesIO(data), **kwargs)
 
 

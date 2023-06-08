@@ -1,6 +1,6 @@
 from PIL import Image,ImageFont,ImageDraw
 import torchvision.transforms as transforms
-
+import torch
 import blobfile as bf
 from mpi4py import MPI
 import numpy as np
@@ -9,7 +9,7 @@ import json
 from random import Random
 import os
 def load_data(
-    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False,microbatch = None
+    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False,microbatch = None,style_dir=None
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -56,7 +56,7 @@ def load_data(
         image_size,
         all_files,
         classes=classes,
-        # styles=styles,
+        style_dir=style_dir,
         shard=MPI.COMM_WORLD.Get_rank(),
         num_shards=MPI.COMM_WORLD.Get_size(),
         stroke_path=stroke_path
@@ -87,7 +87,7 @@ def _list_image_files_recursively(data_dir, json_data):
 
 
 class ImageDataset(Dataset):
-    def __init__(self, resolution, image_paths, classes=None, styles=None, shard=0, num_shards=1,stroke_path:str = None):
+    def __init__(self, resolution, image_paths, classes=None, styles=None, shard=0, num_shards=1,stroke_path:str = None,style_dir:str = None):
         super().__init__()
         self.resolution = resolution
         self.local_images = image_paths[shard:][::num_shards]
@@ -96,6 +96,8 @@ class ImageDataset(Dataset):
         self.use_stroke = False
         self.content_ttf_path = "datasets/CFG/font_content.ttf"
         self.transform_img = resizeKeepRatio((128,128))
+        if style_dir:
+            self.style_dir = style_dir
         if stroke_path != None:
             self.use_stroke = True
             with open(stroke_path,'r') as f:
@@ -141,7 +143,7 @@ class ImageDataset(Dataset):
         path = self.local_images[idx]
         img_basename = os.path.basename(path)
         img_name = os.path.splitext(img_basename)[0]
-
+        context_dict = {}
         with bf.BlobFile(path, "rb") as f:
             img_PIL = Image.open(f)
             img_PIL.load()
@@ -158,7 +160,6 @@ class ImageDataset(Dataset):
         # We are not on a new enough PIL to support the `reducing_gap`
         # argument, which uses BOX downsampling at powers of two first.
         # Thus, we do it by hand to improve downsample quality.
-        
         scale = self.resolution / min(*img_PIL.size)
         img_PIL = img_PIL.resize(
             tuple(round(x * scale) for x in img_PIL.size), resample=Image.BICUBIC
@@ -169,37 +170,45 @@ class ImageDataset(Dataset):
         crop_x = (arr.shape[1] - self.resolution) // 2
         arr = arr[crop_y : crop_y + self.resolution, crop_x : crop_x + self.resolution]
         arr = arr.astype(np.float32) / 127.5 - 1
-        # Get another Image from the same style for the stlye encoder
-        current_style_path = os.path.dirname(path)
-        current_style_imgs = os.listdir(current_style_path)
-        start = 0
-        end = len(current_style_imgs)-1
-        current_style_img = current_style_imgs[Random().randint(start,end)]
 
-        style_path = os.path.join(current_style_path,current_style_img)
+        if self.style_dir:
+            current_style = os.path.dirname(path).split('/')[-1]
+            style_encoding_path = os.path.join(self.style_dir,f"{current_style}.pt")
+            style_img_encoding = torch.load(style_encoding_path,map_location='cpu')
+            style_img_encoding = torch.unsqueeze(style_img_encoding,dim=0)
+            context_dict["style_image"] = style_img_encoding
+        else:
+            # Get another Image from the same style for the stlye encoder
+            current_style_path = os.path.dirname(path)
+            current_style_imgs = os.listdir(current_style_path)
+            start = 0
+            end = len(current_style_imgs)-1
+            current_style_img = current_style_imgs[Random().randint(start,end)]
 
-        with bf.BlobFile(style_path, "rb") as f:
-            style_img_128_PIL = Image.open(f)
-            style_img_128_PIL.load()
+            style_path = os.path.join(current_style_path,current_style_img)
 
-        # We are not on a new enough PIL to support the `reducing_gap`
-        # argument, which uses BOX downsampling at powers of two first.
-        # Thus, we do it by hand to improve downsample quality.
-        while min(*style_img_128_PIL.size) >= 2 * 128:
+            with bf.BlobFile(style_path, "rb") as f:
+                style_img_128_PIL = Image.open(f)
+                style_img_128_PIL.load()
+            context_dict["style_image"] = np.transpose(style_image_128_arr, [2, 0, 1])
+            # We are not on a new enough PIL to support the `reducing_gap`
+            # argument, which uses BOX downsampling at powers of two first.
+            # Thus, we do it by hand to improve downsample quality.
+            while min(*style_img_128_PIL.size) >= 2 * 128:
+                style_img_128_PIL = style_img_128_PIL.resize(
+                    tuple(x // 2 for x in style_img_128_PIL.size), resample=Image.BOX
+                )
+
+            scale = 128 / min(*style_img_128_PIL.size)
             style_img_128_PIL = style_img_128_PIL.resize(
-                tuple(x // 2 for x in style_img_128_PIL.size), resample=Image.BOX
+                tuple(round(x * scale) for x in style_img_128_PIL.size), resample=Image.BICUBIC
             )
 
-        scale = 128 / min(*style_img_128_PIL.size)
-        style_img_128_PIL = style_img_128_PIL.resize(
-            tuple(round(x * scale) for x in style_img_128_PIL.size), resample=Image.BICUBIC
-        )
-
-        style_image_128_arr = np.array(style_img_128_PIL.convert("RGB"))
-        crop_y128 = (style_image_128_arr.shape[0] - 128) // 2
-        crop_x128 = (style_image_128_arr.shape[1] - 128) // 2
-        style_image_128_arr = style_image_128_arr[crop_y128 : crop_y128 + 128, crop_x128 : crop_x128 + 128]
-        style_image_128_arr = style_image_128_arr.astype(np.float32) / 127.5 - 1
+            style_image_128_arr = np.array(style_img_128_PIL.convert("RGB"))
+            crop_y128 = (style_image_128_arr.shape[0] - 128) // 2
+            crop_x128 = (style_image_128_arr.shape[1] - 128) // 2
+            style_image_128_arr = style_image_128_arr[crop_y128 : crop_y128 + 128, crop_x128 : crop_x128 + 128]
+            style_image_128_arr = style_image_128_arr.astype(np.float32) / 127.5 - 1
 
         ##
         # content
@@ -215,11 +224,11 @@ class ImageDataset(Dataset):
             raise
         ##
 
-        context_dict = {}
+        
         content_unicode = ord(img_name)
         context_dict["content_text"] = np.array(content_unicode, dtype=np.int64)
         context_dict["content_image"] = content_image_128_arr
-        context_dict["style_image"] = np.transpose(style_image_128_arr, [2, 0, 1])
+        
         if self.use_stroke:
             context_dict["stroke"] = stroke_arr
         return np.transpose(arr, [2, 0, 1]), context_dict

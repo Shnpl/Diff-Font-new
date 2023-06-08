@@ -5,7 +5,6 @@ numpy array. This can be used to produce samples for FID evaluation.
 
 import argparse
 import os
-
 import numpy as np
 import torch as th
 import torch.distributed as dist
@@ -160,7 +159,14 @@ def main():
     model_kwargs["style_image"] = th.cat(all_style_images, dim=0).to(dist_util.dev())
     if args_dict["model"]["params"]["unet_config"]["use_stroke"]:
         model_kwargs["stroke"] = th.tensor(np.array(all_strokes)).to(dist_util.dev())
-            
+    
+    #NOTE:TEST ONLY
+    
+    misc = []
+    for image in available_characters_with_ext:
+        misc.append(Image.open(os.path.join(style_path, image)))
+    model_kwargs["misc"] = misc
+    #TEST ONLY
     sample_fn = (
         diffusion.p_sample_loop if not args_dict["sampler"]["use_ddim"] else diffusion.ddim_sample_loop
     )
@@ -175,8 +181,9 @@ def main():
     sample = sample.permute(0, 2, 3, 1)
     sample = sample.contiguous()
 
-    gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-    dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+    #gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+    #dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+    gathered_samples = [sample]
     all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
     # if args.class_cond:
     #     gathered_labels = [
@@ -222,7 +229,7 @@ def main():
             if location[0] >= 64*8:
                 location = (0,location[1]+64*2)
         background.save(f"{out_path}/sample.jpg")
-    dist.barrier()
+    #dist.barrier()
     logger.log("sampling complete")
 
 
@@ -260,5 +267,5 @@ def resize_image(img, resolution):
     return img
 
 if __name__ == "__main__":
-    os.environ["VISIBLE_DEVICES"] = "1"
+    os.environ["VISIBLE_DEVICES"] = "0"
     main()

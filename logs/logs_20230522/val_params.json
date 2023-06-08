@@ -1,7 +1,5 @@
 {
-    
-    
-    "model_name":"model010000.pt",    
+    "model_name":"model050000.pt",    
     "sampler":
     {
         "use_ddim":true,

@@ -26,7 +26,11 @@ def main():
     logger.configure(args_dict["path"])
     
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"])
+    if args_dict["data"]["style_dir"]:
+        style_average = True
+    else:
+        style_average = False
+    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"],style_average = style_average)
     model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args_dict["model"]["schedule_sampler"], diffusion)
 
@@ -52,7 +56,7 @@ def main():
 def create_argparser():
     #defaults = model_and_diffusion_defaults()
     defaults = {}
-    path = "logs/logs_20230522"
+    path = "logs/logs_20230608"
     with open(os.path.join(path,'train_params.json'),'r') as f:
         modified = json.load(f)
     defaults.update(modified)
@@ -63,5 +67,5 @@ def create_argparser():
 
 
 if __name__ == "__main__":
-    os.environ["VISIBLE_DEVICES"] = "0"
+    
     main()

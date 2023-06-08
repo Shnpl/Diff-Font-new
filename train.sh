@@ -1,0 +1,1 @@
+nohup python scripts/image_train.py &

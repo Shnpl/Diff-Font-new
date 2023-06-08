@@ -1,0 +1,62 @@
+{
+    "model":
+    {
+        "lr": 1e-4,
+        "lr_anneal_steps": 0,
+        "weight_decay": 0.0,
+        "schedule_sampler": "uniform",
+        "ema_rate": "0.9999",
+        "log_interval": 10,
+        "save_interval": 10000,
+        "use_fp16": false,
+        "fp16_scale_growth": 0.001,
+        "resume_checkpoint": "",
+        "params":
+        {
+            "diffusion_steps": 1000,
+            "noise_schedule": "cosine",
+            "learn_sigma": false,
+            "sigma_small":false,
+            "use_kl":false,
+            "predict_xstart":false,
+            "rescale_timesteps":true,
+            "rescale_learned_sigmas":true,
+            "timestep_respacing":"",
+
+            "unet_config":
+            {
+                "image_size":64,
+                "num_channels":128,
+                "attention_resolutions":"16,8",
+                "num_res_blocks": 3,
+                "num_heads":4,
+                "num_heads_upsample":-1,
+                "use_scale_shift_norm":true,
+                "dropout":0.0,
+                "use_checkpoint":true,
+                "class_cond": false,
+                "style_avg_pool":true,
+                "use_stroke": true,
+                "use_content_encoder":false,
+                "use_spatial_transformer" :true,
+                "transformer_depth" : 1,
+                "use_seqential_feature":true,
+                "pretrained_dict":"models/CFG/checkpoint_epoch6.pth"
+            }
+        }
+    },
+    "data":
+    {
+        "batch_size": 128,
+        "microbatch": 64,
+        "data_dir": "datasets/CFG/seen_font500_800",
+        "style_dir": "datasets/CFG/seen_font500_800_style"
+    }
+}
+
+    
+    
+    
+    
+    
+    

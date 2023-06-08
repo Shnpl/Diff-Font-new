@@ -23,7 +23,27 @@ from .nn import (
     timestep_embedding,
     checkpoint,
 )
+import torchvision.transforms as transforms
+def resize_image(img, resolution):
+    while min(*img.size) >= 2 * resolution:
+        img = img.resize(
+            tuple(x // 2 for x in img.size), resample=Image.Resampling.BOX
+        )
 
+    scale = resolution / min(*img.size)
+    img = img.resize(
+        tuple(round(x * scale) for x in img.size), resample=Image.Resampling.BICUBIC
+    )
+
+    arr = np.array(img.convert("RGB"))
+    crop_y = (arr.shape[0] - resolution) // 2
+    crop_x = (arr.shape[1] - resolution) // 2
+    arr = arr[crop_y: crop_y + resolution, crop_x: crop_x + resolution]
+    arr = arr.astype(np.float32) / 127.5 - 1
+
+    transf = transforms.ToTensor()
+    img = transf(arr)
+    return img
 from improved_diffusion.modules.attention import SpatialTransformer
 def gram_schmidt(x, ys):
   for y in ys:
@@ -695,6 +715,7 @@ class UNetModel(nn.Module):
         use_spatial_transformer=False,    # custom transformer support
         transformer_depth=1,              # custom transformer support
         use_seqential_feature = False,
+        style_average = False
 
     ):
         super().__init__()
@@ -718,8 +739,10 @@ class UNetModel(nn.Module):
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
-        
-        self.style_encoder = style_encoder_textedit_addskip()
+
+        self.style_average = style_average
+        if not style_average:
+            self.style_encoder = style_encoder_textedit_addskip()
         self.use_stroke = use_stroke
         
         self.use_content_encoder = use_content_encoder
@@ -897,7 +920,7 @@ class UNetModel(nn.Module):
         """
         return next(self.input_blocks.parameters()).dtype
 
-    def forward(self, x, timesteps, y=None,content_text = None,content_image=None, style_image= None, stroke = None):
+    def forward(self, x, timesteps, y=None,content_text = None,content_image=None, style_image= None, stroke = None,misc = None):
         """
         Apply the model to an input batch.
 
@@ -919,17 +942,42 @@ class UNetModel(nn.Module):
             assert y.shape == (x.shape[0],)
         else:
             # Class-free-Cond
-
+            
             # Get style_emb
-            if self.use_seqential_feature:
-                assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"
-                if self.style_avg_pool == False:
-                    style_emb = self.style_encoder(style_image)[0]
-                    style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+            if self.style_average:
+                style_emb = style_image
+            else:
+                if self.use_seqential_feature:
+                    assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"
+                    if self.style_avg_pool == False:
+                        style_emb = self.style_encoder(style_image)[0]
+                        style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+                    else:
+                        if misc != None:
+                            if hasattr(self,"style_emb"):
+                                style_emb = self.style_emb
+                            else:
+                                sty_emb_tmp = []
+                                for image in misc:
+                                    image = resize_image(image,128).unsqueeze(0).to("cuda:0")
+                                    sty_emb_tmp.extend(self.style_encoder(image)[1])
+                                sty_emb_tmp = torch.stack(sty_emb_tmp).squeeze()
+                                mu = torch.mean(sty_emb_tmp,dim=0)
+                                std = torch.std(sty_emb_tmp,dim = 0)
+                                new = []
+                                for pt in sty_emb_tmp:
+                                    if torch.norm(pt-mu) < torch.norm(std)*0.8:
+                                        new.append(pt)
+                                print(len(new))
+                                new = torch.stack(new).squeeze()
+                                style_emb = torch.mean(new,dim=0)
+                                style_emb = torch.stack(16*[style_emb.unsqueeze(0)])
+                                #encodings = torch.stack(encodings).cpu().squeeze()
+                                self.style_emb = style_emb
+                        else:
+                            style_emb = self.style_encoder(style_image)[1].unsqueeze(1)
                 else:
                     style_emb = self.style_encoder(style_image)[1].unsqueeze(1)
-            else:
-                style_emb = self.style_encoder(style_image)[1].unsqueeze(1)
             
             # Get content_emb
             if self.use_content_encoder:

@@ -171,6 +171,7 @@ class TrainLoop:
         self.model.convert_to_fp16()
 
     def run_loop(self):
+        start_saved = False
         while (
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
@@ -182,8 +183,10 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
                 logger.info(time.asctime())
-            if self.step % self.save_interval == 0:
+            print(self.step)
+            if (self.step % self.save_interval == 0 and self.step >0) or (self.resume_step == 0 and start_saved == False):
                 self.save()
+                start_saved = True
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
@@ -295,8 +298,8 @@ class TrainLoop:
             param_group["lr"] = lr
 
     def log_step(self):
-        logger.logkv("step", self.step + self.resume_step)
-        logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
+        logger.logkv("step", str(self.step + self.resume_step))
+        logger.logkv("samples", str((self.step + self.resume_step + 1) * self.global_batch))
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 
