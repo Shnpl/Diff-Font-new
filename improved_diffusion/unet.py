@@ -945,7 +945,9 @@ class UNetModel(nn.Module):
             
             # Get style_emb
             if self.style_average:
-                style_emb = style_image
+                style_emb = torch.zeros(style_image.shape[0],style_image.shape[1],1024).to(style_image.device)
+                    
+                style_emb[:,:,0:style_image.shape[2]] = style_image
             else:
                 if self.use_seqential_feature:
                     assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"

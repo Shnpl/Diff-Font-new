@@ -6,3 +6,4 @@ venv
 improved_diffusion.egg-info
 dist
 nohup.out
+lightning_logs

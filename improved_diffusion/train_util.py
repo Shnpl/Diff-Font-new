@@ -211,19 +211,7 @@ class TrainLoop:
             for key in cond:
                 value = cond[key][i : i + self.microbatch]
                 micro_cond[key] = value.to(dist_util.dev())
-            # micro_cond = {
-            #     k: v[]
-            #     for k, v in cond.items()
-            # }
-
-            #micro_sty = style_batch[i : i + self.microbatch].to(dist_util.dev())
-            # micro_sty = {
-            #     k: v[i : i + self.microbatch]
-            #     for k, v in sty.items()
-            # }
-            # if stroke != None:
-            #     micro_stroke = stroke[i : i + self.microbatch].to(dist_util.dev())
-            #     micro_cond.update({"stroke":micro_stroke})
+           
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 

@@ -1,13 +1,14 @@
-import torch
-from collections import OrderedDict
-# old = torch.load("logs/logs_20230514/model050000.pt",map_location='cpu')
-# new = OrderedDict()
-# for k in old:
-#     print(k)
-#     k_new = k
-#     if k_new == "label_emb.weight":
-#         k_new = "content_emb.weight"
-#     new[k_new] = old[k]
-# torch.save(new,"logs/logs_20230514/model050000_new.pt")
-data = torch.load("datasets/CFG/seen_font500_800_style/0.pt")
-print((data))
+import os
+from PIL import Image
+import matplotlib.pyplot as plt
+
+path = 'datasets/CFG/seen_font500_800'
+styles = os.listdir(path)
+for style in styles:
+    style_path = os.path.join(path,style,'哧.png')
+    print(style)
+    image = Image.open(style_path)
+    plt.imshow(image)
+    option = input('n to reject')
+
+

@@ -61,7 +61,9 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        return self.net(x)
+        t = x.dtype
+        x = x.type(torch.float32)
+        return self.net(x).type(t)
 
 
 def zero_module(module):
@@ -169,7 +171,8 @@ class CrossAttention(nn.Module):
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
-
+        t = x.dtype
+        x = x.type(torch.float32)
         q = self.to_q(x)
         context = default(context, x)
         k = self.to_k(context)
@@ -190,7 +193,7 @@ class CrossAttention(nn.Module):
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
-        return self.to_out(out)
+        return self.to_out(out).type(t)
 
 
 class BasicTransformerBlock(nn.Module):
@@ -209,9 +212,10 @@ class BasicTransformerBlock(nn.Module):
         return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
 
     def _forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
+        t = x.dtype
+        x = self.attn1(self.norm1(x.type(torch.float32)).type(t)) + x
+        x = self.attn2(self.norm2(x.type(torch.float32)).type(t), context=context) + x
+        x = self.ff(self.norm3(x.type(torch.float32)).type(t)) + x
         return x
 
 

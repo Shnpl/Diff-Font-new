@@ -1,7 +1,8 @@
 """
 Train a diffusion model on images.
 """
-
+import sys
+sys.path.append('.')
 import argparse
 
 from improved_diffusion import dist_util, logger
@@ -13,12 +14,13 @@ from improved_diffusion.script_util import (
     args_to_dict,
     add_dict_to_argparser,
 )
+import pytorch_lightning as pl
 from improved_diffusion.train_util import TrainLoop
 
 import torch
 import os
 import json
-
+    
 def main():
     args = create_argparser().parse_args()
     args_dict = vars(args)
@@ -56,7 +58,7 @@ def main():
 def create_argparser():
     #defaults = model_and_diffusion_defaults()
     defaults = {}
-    path = "logs/logs_20230608"
+    path = "logs/logs_20230727"
     with open(os.path.join(path,'train_params.json'),'r') as f:
         modified = json.load(f)
     defaults.update(modified)

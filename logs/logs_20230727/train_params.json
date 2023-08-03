@@ -1,15 +1,19 @@
 {
-    "model_name":"model120000.pt",    
-    "sampler":
-    {
-        "use_ddim":true,
-        "clip_denoised":true
-    },
     "model":
     {
+        "lr": 1e-4,
+        "lr_anneal_steps": 0,
+        "weight_decay": 0.0,
+        "schedule_sampler": "uniform",
+        "ema_rate": "0.9999",
+        "log_interval": 10,
+        "save_interval": 10000,
+        "use_fp16": false,
+        "fp16_scale_growth": 0.001,
+        "resume_checkpoint": "",
         "params":
         {
-            "diffusion_steps": 1000,
+            "steps": 1000,
             "noise_schedule": "cosine",
             "learn_sigma": false,
             "sigma_small":false,
@@ -17,7 +21,7 @@
             "predict_xstart":false,
             "rescale_timesteps":true,
             "rescale_learned_sigmas":true,
-            "timestep_respacing":"256",
+            "timestep_respacing":"",
 
             "unet_config":
             {
@@ -29,7 +33,7 @@
                 "num_heads_upsample":-1,
                 "use_scale_shift_norm":true,
                 "dropout":0.0,
-                "use_checkpoint":true,
+                "use_checkpoint":false,
                 "class_cond": false,
                 "style_avg_pool":true,
                 "use_stroke": true,
@@ -43,10 +47,25 @@
     },
     "data":
     {
-        "batch_size": 16,
-        "data_dir": "datasets/CFG/seen_font500_800",
-        "style_path":"datasets/CFG/seen_font500_800/4",
-        "style_dir": "datasets/CFG/seen_font500_800_style"
+        "train":
+        {
+            "batch_size": 32,
+            "data_dir": "datasets/CFG/font500_800",
+            "style_dir": "datasets/CFG/font500_800_style"
+        },
+        "val":
+        {
+            "batch_size": 16,
+            "data_dir": "datasets/CFG/font500_800",
+            "style_dir": "datasets/CFG/font500_800_style"
+        },
+        "test":
+        {
+            "batch_size": 16,
+            "data_dir": "datasets/CFG/font500_800",
+            "style_dir": "datasets/CFG/font500_800_style"
+        }
+        
     }
 }
 

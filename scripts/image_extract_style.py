@@ -1,29 +1,19 @@
 import argparse
 import os
+os.environ['CUDA_VISIBLE_DEVICES']='1'
 import numpy as np
-import torch as th
+import torch 
 import torch.distributed as dist
 
 from PIL import Image
 import torchvision.transforms as transforms
-import blobfile as bf
-
-from improved_diffusion import dist_util, logger
-from improved_diffusion.script_util import (
-    NUM_CLASSES,
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
-    add_dict_to_argparser,
-    args_to_dict,
-)
 
 import json
 import math
 import random
-from improved_diffusion.image_datasets import ImageDataset
 import torch
-from improved_diffusion.unet import style_encoder_textedit_addskip
-
+#from improved_diffusion.unet import style_encoder_textedit_addskip
+from font_classifier import FontClassifier
 def resize_image(img, resolution):
     while min(*img.size) >= 2 * resolution:
         img = img.resize(
@@ -46,22 +36,40 @@ def resize_image(img, resolution):
     return img
 
 if __name__ == "__main__":
-    font_dir = "datasets/CFG/seen_font500_800"
+    font_dir = "datasets/CFG/font500_800"
     styles = os.listdir(font_dir)
-    style_encoder = style_encoder_textedit_addskip()
-    style_encoder_state_dict = torch.load("models/CFG/checkpoint_epoch6.pth",map_location='cpu')['netStyleEncoder']
-    style_encoder.load_state_dict(style_encoder_state_dict)
+    #style_encoder = style_encoder_textedit_addskip()
+    style_encoder = FontClassifier(use_fc=False)
+    style_encoder.eval()
+    style_encoder_state_dict = torch.load("models/font_classifier/epoch=24-step=311875.ckpt",map_location='cpu')
+    for k in list(style_encoder_state_dict['state_dict'].keys()):
+        if k.startswith('model.'):
+            style_encoder_state_dict['state_dict'][k[len("model."):]] = style_encoder_state_dict['state_dict'][k]
+            del style_encoder_state_dict['state_dict'][k]
+    style_encoder.load_state_dict(style_encoder_state_dict['state_dict'])
     style_encoder.to(torch.device("cuda:0"))
     for style in styles:
         style_path = os.path.join(font_dir,style)
-        available_characters_with_ext = os.listdir(style_path)
+        
+        available_characters_with_ext_raw = os.listdir(style_path)
+        ##
+        available_characters_with_ext = []
+        with open ("datasets/CFG/seen_characters.json",'r') as f:
+            seen_char = json.load(f)
+        for char_withext in available_characters_with_ext_raw:
+            char = os.path.splitext(char_withext)[0]
+            if char in seen_char:
+                available_characters_with_ext.append(char_withext)
+        
+        ##
         misc = []
         for image in available_characters_with_ext:
             misc.append(Image.open(os.path.join(style_path, image)))
         sty_emb_tmp = []
         for image in misc:
             image = resize_image(image,128).unsqueeze(0).to("cuda:0")
-            sty_emb_tmp.extend(style_encoder(image)[1].detach())
+            #sty_emb_tmp.extend(style_encoder(image)[1].detach())
+            sty_emb_tmp.extend(style_encoder(image).detach())
         sty_emb_tmp = torch.stack(sty_emb_tmp).squeeze()
         mu = torch.mean(sty_emb_tmp,dim=0)
         std = torch.std(sty_emb_tmp,dim = 0)
@@ -72,5 +80,5 @@ if __name__ == "__main__":
         print(len(new))
         new = torch.stack(new).squeeze()
         style_emb = torch.mean(new,dim=0)
-        torch.save(style_emb,os.path.join("datasets/CFG/seen_font500_800_style",f"{style}.pt"))
+        torch.save(style_emb,os.path.join(f"{font_dir}_style",f"{style}.pt"))
         #encodings = torch.stack(encodings).cpu().squeeze()

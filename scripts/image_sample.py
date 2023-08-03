@@ -5,6 +5,9 @@ numpy array. This can be used to produce samples for FID evaluation.
 
 import argparse
 import os
+import sys
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
+sys.path.append('.')
 import numpy as np
 import torch as th
 import torch.distributed as dist
@@ -12,7 +15,7 @@ import torch.distributed as dist
 from PIL import Image
 import torchvision.transforms as transforms
 import blobfile as bf
-
+import torch
 from improved_diffusion import dist_util, logger
 from improved_diffusion.script_util import (
     NUM_CLASSES,
@@ -49,7 +52,11 @@ def main():
     logger.configure(logger_path)
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"])
+    if args_dict["data"]["style_dir"]:
+        style_average = True
+    else:
+        style_average = False
+    model, diffusion = create_model_and_diffusion(**args_dict["model"]["params"],style_average = style_average)
     model.load_state_dict(
         dist_util.load_state_dict(os.path.join(args_dict["path"],model_name), map_location="cpu")
     )
@@ -64,7 +71,17 @@ def main():
     #         content_names.append(file)
 
     #sorted_classes = {x: i for i, x in enumerate(sorted(set(content_names)))}
-    available_characters_with_ext = os.listdir(style_path)
+    available_characters_with_ext_raw = os.listdir(style_path)
+    ##
+    available_characters_with_ext = []
+    with open ("datasets/CFG/seen_characters.json",'r') as f:
+        seen_char = json.load(f)
+    for char_withext in available_characters_with_ext_raw:
+        char = os.path.splitext(char_withext)[0]
+        if char in seen_char:
+            available_characters_with_ext.append(char_withext)
+    
+    ##
     logger.log("sampling...")
     all_images = []
     all_gt_images = []
@@ -161,11 +178,11 @@ def main():
         model_kwargs["stroke"] = th.tensor(np.array(all_strokes)).to(dist_util.dev())
     
     #NOTE:TEST ONLY
-    
-    misc = []
-    for image in available_characters_with_ext:
-        misc.append(Image.open(os.path.join(style_path, image)))
-    model_kwargs["misc"] = misc
+    model_kwargs["style_image"] = torch.stack([torch.unsqueeze(torch.load(os.path.join(args_dict["data"]["style_dir"],f"{style_num}.pt")),dim=0)]*args_dict["data"]["batch_size"])
+    # misc = []
+    # for image in available_characters_with_ext:
+    #     misc.append(Image.open(os.path.join(style_path, image)))
+    # model_kwargs["misc"] = misc
     #TEST ONLY
     sample_fn = (
         diffusion.p_sample_loop if not args_dict["sampler"]["use_ddim"] else diffusion.ddim_sample_loop
@@ -236,7 +253,7 @@ def main():
 def create_argparser():
     #defaults=model_and_diffusion_defaults() 
     defaults = {}
-    path = "logs/logs_20230522"
+    path = "logs/logs_20230727"
     with open (os.path.join(path,'val_params.json'),"r") as f:    
         modified = json.load(f)
     defaults.update(modified)
