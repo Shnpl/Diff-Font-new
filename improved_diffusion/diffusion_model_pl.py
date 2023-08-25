@@ -3,55 +3,42 @@ Train a diffusion model on images.
 """
 import sys
 sys.path.append('.')
-
-import numpy as np
-import torch as th
-
-from PIL import Image
-import torchvision.transforms as transforms
-import blobfile as bf
-import torch
-from improved_diffusion import dist_util, logger
-from improved_diffusion.script_util import (
-    NUM_CLASSES,
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
-    add_dict_to_argparser,
-    args_to_dict,
-)
-
+import os
 import json
 import math
-import random
-from improved_diffusion.image_datasets import ImageDataset
+from PIL import Image
+
+import numpy as np
+
+import torch
+import torchvision.transforms as transforms
+from pytorch_lightning import loggers as pl_loggers
+
+import pytorch_lightning as pl
 from pytorch_lightning.utilities.types import EVAL_DATALOADERS, STEP_OUTPUT
-import argparse
+
 import functools
-from improved_diffusion import dist_util, logger
 from improved_diffusion.image_datasets import load_data
 from improved_diffusion.resample import create_named_schedule_sampler
 from improved_diffusion.script_util import (
-    model_and_diffusion_defaults,
     create_model,
     create_gaussian_diffusion,
-    args_to_dict,
-    add_dict_to_argparser,
 )
-import pytorch_lightning as pl
-from improved_diffusion.train_util import TrainLoop
 #from resample import LossAwareSampler, UniformSampler
 
 
-import torch
-import os
-import json
+
 # Rewrite the code with Pytorch Lightning
 class DiffusionModel(pl.LightningModule):
-    def __init__(self, hyper_parameters_path):
+    def __init__(self, hyper_parameters):
         super().__init__()
-        with open(hyper_parameters_path,'r') as f:
-            kwargs = json.load(f)
-        
+        if type(hyper_parameters) == dict:
+            kwargs = hyper_parameters
+        elif type(hyper_parameters) == str:
+            with open(hyper_parameters,'r') as f:
+                kwargs = json.load(f)
+        else:
+            raise TypeError("hyper_parameters should be a dict or a str")
         
         self.diffusion_params = kwargs["model"]["params"].copy()
         del self.diffusion_params["unet_config"]
@@ -78,11 +65,10 @@ class DiffusionModel(pl.LightningModule):
         hyper_parameters.update(self.diffusion_params)
         hyper_parameters.update(self.train_params)
         self.save_hyperparameters(hyper_parameters)
-
+        self.iter_style_vector = False
         #
     def forward(self, micro_batch, t,micro_cond):
-        if not hasattr(self,'path'):
-            self.path = f"lightning_logs/version_{self.logger.version}"
+
         compute_losses = functools.partial(
             self.diffusion.training_losses,
             self.model,
@@ -93,6 +79,12 @@ class DiffusionModel(pl.LightningModule):
         losses = compute_losses()
         return losses
     def training_step(self, batch, batch_idx):
+        if not hasattr(self,'path'):
+            self.path = self.trainer.ckpt_path
+            #f"lightning_logs/version_{self.logger.version}"
+        if self.iter_style_vector:
+            for param in self.model.parameters():
+                param.requires_grad = False
         img_batch, cond_batch = batch
         img_batch = img_batch.to(self.device)
         cond_batch = {key: value.to(self.device) for key, value in cond_batch.items()}
@@ -109,6 +101,16 @@ class DiffusionModel(pl.LightningModule):
         return loss
     def validation_step(self, batch, batch_idx):
         if self.local_rank == 0:
+            if not hasattr(self,'path'):
+                self.path = f"lightning_logs/version_{self.logger.version}"
+            if not hasattr(self,'eval_diffusion'):
+                self.eval_diffusion_params = self.diffusion_params.copy()
+                self.eval_diffusion_params["timestep_respacing"] = "128"
+                self.eval_diffusion_params["rescale_timesteps"] = True
+                self.eval_diffusion = create_gaussian_diffusion(**self.eval_diffusion_params)
+
+            self.trainer.save_checkpoint(f"{self.path}/checkpoints/{self.global_step}.ckpt")
+            #if self.global_step % (self.trainer.val_check_interval*10) == 0:
             img_batch, cond_batch = batch
             img_batch = img_batch.to(self.device)
             cond_batch = {key: value.to(self.device) for key, value in cond_batch.items()}
@@ -120,7 +122,7 @@ class DiffusionModel(pl.LightningModule):
                 model_kwargs["stroke"] = cond_batch['stroke'].to(self.device)
     
             sample_fn = (
-            self.diffusion.p_sample_loop 
+            self.eval_diffusion.p_sample_loop 
             )
             sample = sample_fn(
                 self.model,
@@ -132,7 +134,6 @@ class DiffusionModel(pl.LightningModule):
                 progress=True
             )
             log_images(sample, img_batch, f"{self.path}/val_{self.global_step}.png")
-            self.trainer.save_checkpoint(f"{self.path}/checkpoints/{self.global_step}.ckpt")
     def test_step(self, batch, batch_idx):
         img_batch, cond_batch = batch
         img_batch = img_batch.to(self.device)
@@ -168,10 +169,16 @@ class DiffusionModel(pl.LightningModule):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.train_params['lr'])
         return optimizer
     def train_dataloader(self):
-        data = load_data(
-        image_size = self.model_params["image_size"],
-        **self.train_data_params    
-        )
+        if self.iter_style_vector:
+            data = load_data(
+            image_size = self.model_params["image_size"],
+            **self.test_data_params,
+            )
+        else:
+            data = load_data(
+            image_size = self.model_params["image_size"],
+            **self.train_data_params    
+            )
         return data
     def val_dataloader(self) -> EVAL_DATALOADERS:
         data = load_data(
@@ -194,11 +201,11 @@ def log_images(generated_images:torch.Tensor,gt_images:torch.Tensor,path:str):
     gt_images_list = []
     batchsize = generated_images.shape[0]
     for i in range(batchsize):
-        generated_image = ((generated_images[i] + 1) * 127.5).clamp(0, 255).to(th.uint8)
+        generated_image = ((generated_images[i] + 1) * 127.5).clamp(0, 255).to(torch.uint8)
         generated_image = generated_image.permute(1,2,0).contiguous().cpu().numpy()
         generated_image = Image.fromarray(generated_image).resize((64,64))
 
-        gt_image = ((gt_images[i] + 1) * 127.5).clamp(0, 255).to(th.uint8)
+        gt_image = ((gt_images[i] + 1) * 127.5).clamp(0, 255).to(torch.uint8)
         gt_image = gt_image.permute(1,2,0).contiguous().cpu().numpy()
         gt_image = Image.fromarray(gt_image).resize((64,64))
         
@@ -223,18 +230,3 @@ def log_images(generated_images:torch.Tensor,gt_images:torch.Tensor,path:str):
         if location[0] >= 64*8:
             location = (0,location[1]+64*2)
     background.save(path)
-
-if __name__ == "__main__":
-    trainer = pl.Trainer(accumulate_grad_batches=2,
-                         max_steps=-1,
-                         precision=16,
-                         log_every_n_steps=1,
-                         devices=[0,1],
-                         val_check_interval=400,
-                         limit_val_batches=1,
-                         num_sanity_val_steps=0
-                         )
-    model = DiffusionModel("logs/logs_20230727/train_params.json")
-    trainer.fit(model)
-
-    #trainer.test(model,ckpt_path="lightning_logs/version_0/checkpoints/epoch=20800.ckpt")

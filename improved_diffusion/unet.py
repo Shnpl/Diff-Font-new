@@ -754,26 +754,26 @@ class UNetModel(nn.Module):
         if self.use_spatial_transformer:
             time_embed_dim = model_channels * 4
             if use_seqential_feature:
-                self.context_dim = 1024
+                self.context_dim = 2048
                 context_dim = self.context_dim
             else:
                 if self.use_stroke:
-                    self.context_dim = 3072
+                    self.context_dim = 6144
                     context_dim = self.context_dim
                 else:
-                    self.context_dim = 2048
+                    self.context_dim = 4096
                     context_dim = self.context_dim
         else:
             if self.use_stroke:
-                time_embed_dim = 3072
+                time_embed_dim = 6144
             else:
-                time_embed_dim = 2048
+                time_embed_dim = 4096
 
         if self.use_stroke:
             self.stroke_linear = nn.Sequential(
-                linear(32,1024),
+                linear(32,2048),
                 SiLU(),
-                linear(1024,1024),
+                linear(2048,2048),
                 )
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -783,7 +783,7 @@ class UNetModel(nn.Module):
         if self.use_content_encoder:
             self.content_emb = content_encoder()
         else:
-            self.content_emb = nn.Embedding(0x9FFF-0x4E00, 1024)#Unicode
+            self.content_emb = nn.Embedding(0x9FFF-0x4E00, 2048)#Unicode
 
         self.input_blocks = nn.ModuleList(
             [
@@ -945,7 +945,7 @@ class UNetModel(nn.Module):
             
             # Get style_emb
             if self.style_average:
-                style_emb = torch.zeros(style_image.shape[0],style_image.shape[1],1024).to(style_image.device)
+                style_emb = torch.zeros(style_image.shape[0],style_image.shape[1],2048).to(style_image.device)
                     
                 style_emb[:,:,0:style_image.shape[2]] = style_image
             else:
@@ -953,7 +953,7 @@ class UNetModel(nn.Module):
                     assert self.use_spatial_transformer == True,"If you use sequential feature, spatial transformer must be enabled"
                     if self.style_avg_pool == False:
                         style_emb = self.style_encoder(style_image)[0]
-                        style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+                        style_emb = rearrange(style_emb, 'b c h w -> b (h w) c')#[b,16,2048]
                     else:
                         if misc != None:
                             if hasattr(self,"style_emb"):
@@ -985,14 +985,14 @@ class UNetModel(nn.Module):
             if self.use_content_encoder:
                 # image = Image.fromarray(np.uint8(np.array(content_image[0].cpu())).transpose([1,2,0]))
                 # image.save('out.png')
-                content_emb,_ = self.content_emb(content_image)#[b,1024,4,4]
-                content_emb = rearrange(content_emb, 'b c h w -> b (h w) c')#[b,16,1024]
+                content_emb,_ = self.content_emb(content_image)#[b,2048,4,4]
+                content_emb = rearrange(content_emb, 'b c h w -> b (h w) c')#[b,16,2048]
             else:
-                content_emb = self.content_emb(content_text-0x4E00).unsqueeze(1)#[b,1,1024]
+                content_emb = self.content_emb(content_text-0x4E00).unsqueeze(1)#[b,1,2048]
 
             # Get stroke_emb
             if self.use_stroke:
-                stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,1024]
+                stroke_emb = self.stroke_linear(stroke).unsqueeze(1)#[b,1,2048]
             
             # Get latent_emb and context
             if self.use_stroke:
@@ -1001,7 +1001,7 @@ class UNetModel(nn.Module):
                 latent_emb = torch.cat((content_emb, style_emb), dim=1)
             latent_size = latent_emb.size()[1]
             if self.use_seqential_feature:            
-                pos_emb = timestep_embedding(th.linspace(1,latent_size,latent_size,device=latent_emb.device), 1024)
+                pos_emb = timestep_embedding(th.linspace(1,latent_size,latent_size,device=latent_emb.device), 2048)
                 context = latent_emb + pos_emb
             else:
                 context = latent_emb

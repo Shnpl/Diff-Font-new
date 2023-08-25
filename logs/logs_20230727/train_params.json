@@ -55,13 +55,14 @@
         },
         "val":
         {
-            "batch_size": 16,
-            "data_dir": "datasets/CFG/font500_800",
-            "style_dir": "datasets/CFG/font500_800_style"
+            "batch_size": 32,
+            "data_dir": "datasets/CFG/font_extra_800",
+            "style_dir": "datasets/CFG/font_extra_800_style",
+            "char_set": "datasets/CFG/chars_800.json"
         },
         "test":
         {
-            "batch_size": 16,
+            "batch_size": 32,
             "data_dir": "datasets/CFG/font500_800",
             "style_dir": "datasets/CFG/font500_800_style"
         }

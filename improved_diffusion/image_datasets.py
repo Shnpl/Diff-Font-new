@@ -1,15 +1,16 @@
+import sys
+sys.path.append('..')
 from PIL import Image,ImageFont,ImageDraw
 import torchvision.transforms as transforms
 import torch
 import blobfile as bf
-from mpi4py import MPI
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 import json
 from random import Random
 import os
 def load_data(
-    *, data_dir, batch_size, image_size, class_cond=False, deterministic=False,microbatch = None,style_dir=None
+    *, data_dir, batch_size, image_size, deterministic=False,style_dir=None,char_set=None
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -19,7 +20,7 @@ def load_data(
     The kwargs dict can be used for class labels, in which case the key is "y"
     and the values are integer tensors of class labels.
 
-    :param data_dir: a dataset directory.
+    :param data_dir: dataset directory.
     :param batch_size: the batch size of each returned pair.
     :param image_size: the size to which images are resized.
     :param class_cond: if True, include a "y" key in returned dicts for class
@@ -27,39 +28,12 @@ def load_data(
                        exception will be raised.
     :param deterministic: if True, yield results in a deterministic order.
     """
-    if not data_dir:
-        raise ValueError("unspecified data directory")
-    # with open('datasets/CFG/seen_characters.json', 'r', encoding='utf8') as fp:
-    #     json_data = json.load(fp)
-    #all_files = _list_image_files_recursively(data_dir, json_data)
-    all_files = []
-    secondary_dirs = os.listdir(data_dir)
-    secondary_dirs = [os.path.join(data_dir,style_dir) for style_dir in secondary_dirs]
-    for secondary_dir in secondary_dirs:
-        files = os.listdir(secondary_dir)
-        files = [os.path.join(secondary_dir,file) for file in files if os.path.splitext(file)[-1] in [".jpg", ".jpeg", ".png", ".gif"]]
-        all_files.extend(files) 
-    classes = None
-    if class_cond:
-        # Assume classes are the first part of the filename,
-        # before an underscore.
-        class_names = [bf.basename(path).split("_")[0] for path in all_files]
-        sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
-        classes = [sorted_classes[x] for x in class_names]
-        # styles = [bf.dirname(path) for path in all_files]
-    # for index in [5209]:
-    #     for key, value in sorted_classes.items():
-    #         if value == index:
-    #             print(key)
-    stroke_path = "datasets/CFG/new_strokes.json"
+
     dataset = ImageDataset(
-        image_size,
-        all_files,
-        classes=classes,
+        resolution=image_size,
+        data_dir = data_dir,
         style_dir=style_dir,
-        shard=MPI.COMM_WORLD.Get_rank(),
-        num_shards=MPI.COMM_WORLD.Get_size(),
-        stroke_path=stroke_path
+        char_set=char_set
     )
     if deterministic:
         loader = DataLoader(
@@ -72,32 +46,45 @@ def load_data(
     while True:
         yield from loader
 
-
-def _list_image_files_recursively(data_dir, json_data):
-    results = []
-    for entry in sorted(bf.listdir(data_dir)):
-        full_path = bf.join(data_dir, entry)
-        ext = entry.split(".")[-1]
-        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif"] and entry.split(".")[0] in json_data:
-        # if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif"]:
-            results.append(full_path)
-        elif bf.isdir(full_path):
-            results.extend(_list_image_files_recursively(full_path, json_data))
-    return results
-
-
 class ImageDataset(Dataset):
-    def __init__(self, resolution, image_paths, classes=None, styles=None, shard=0, num_shards=1,stroke_path:str = None,style_dir:str = None):
+    def __init__(self, 
+                 data_dir, 
+                 resolution=64, 
+                 char_set=None,
+                 stroke_path:str = 'datasets/CFG/new_strokes.json',
+                 style_dir:str = None):
         super().__init__()
+        if not data_dir:
+            raise ValueError("unspecified data directory")
+        if char_set == None:
+            pass
+        elif type(char_set) == str:
+            with open(char_set,'r') as f:
+                char_set = json.load(f)
+        elif type(char_set) == list:
+            pass
+        else:
+            raise TypeError("char_set should be path or list")
+        all_files = []
+        secondary_dirs = os.listdir(data_dir)
+        secondary_dirs = [os.path.join(data_dir,style_dir) for style_dir in secondary_dirs]
+        
+        for secondary_dir in secondary_dirs:
+            files = os.listdir(secondary_dir)
+            if char_set:
+                files = [file for file in files if os.path.splitext(file)[0] in char_set]
+
+            files = [os.path.join(secondary_dir,file) for file in files if os.path.splitext(file)[-1] in [".jpg", ".jpeg", ".png", ".gif"]]
+            all_files.extend(files) 
+
         self.resolution = resolution
-        self.local_images = image_paths[shard:][::num_shards]
+        self.local_images = all_files
         #self.local_classes = None if classes is None else classes[shard:][::num_shards]
         # self.local_styles = None if styles is None else styles[shard:][::num_shards]
         self.use_stroke = False
         self.content_ttf_path = "datasets/CFG/font_content.ttf"
         self.transform_img = resizeKeepRatio((128,128))
-        if style_dir:
-            self.style_dir = style_dir
+        self.style_dir = style_dir
         if stroke_path != None:
             self.use_stroke = True
             with open(stroke_path,'r') as f:
@@ -190,6 +177,8 @@ class ImageDataset(Dataset):
             with bf.BlobFile(style_path, "rb") as f:
                 style_img_128_PIL = Image.open(f)
                 style_img_128_PIL.load()
+                style_image_128_arr = np.array(style_img_128_PIL.convert("RGB"))
+            context_dict['style_name'] = current_style_path.split('/')[-1]
             context_dict["style_image"] = np.transpose(style_image_128_arr, [2, 0, 1])
             # We are not on a new enough PIL to support the `reducing_gap`
             # argument, which uses BOX downsampling at powers of two first.
