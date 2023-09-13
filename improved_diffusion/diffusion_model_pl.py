@@ -16,7 +16,8 @@ from pytorch_lightning import loggers as pl_loggers
 
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.types import EVAL_DATALOADERS, STEP_OUTPUT
-
+import tqdm
+from improved_diffusion.utils import resize_image
 import functools
 from improved_diffusion.image_datasets import load_data
 from improved_diffusion.resample import create_named_schedule_sampler
@@ -24,14 +25,12 @@ from improved_diffusion.script_util import (
     create_model,
     create_gaussian_diffusion,
 )
+from improved_diffusion.font_classifier import FontClassifier_resnet18,FontClassifier_resnet50,create_style_encoder
 #from resample import LossAwareSampler, UniformSampler
-
-
 
 # Rewrite the code with Pytorch Lightning
 class DiffusionModel(pl.LightningModule):
-    def __init__(self, hyper_parameters):
-        super().__init__()
+    def _prepare_hyperparams(self,hyper_parameters):
         if type(hyper_parameters) == dict:
             kwargs = hyper_parameters
         elif type(hyper_parameters) == str:
@@ -39,34 +38,99 @@ class DiffusionModel(pl.LightningModule):
                 kwargs = json.load(f)
         else:
             raise TypeError("hyper_parameters should be a dict or a str")
+        # Misc params(lr,devices,etc.)
+        misc = kwargs["misc"].copy()
+
+        # Diffusion params
+        diffusion_params = kwargs["diffusion"].copy()
+
+        # Model params(UNET)
+        model_params = kwargs["model_params"].copy()
+        model_params['learn_sigma'] = diffusion_params['learn_sigma']
+        # schedule_sampler_params
+        schedule_sampler_params = kwargs["schedule_sampler"]
+        # Style Encoder
+        style_encoder_params = kwargs["style_encoder"].copy()
         
-        self.diffusion_params = kwargs["model"]["params"].copy()
-        del self.diffusion_params["unet_config"]
-
-        self.train_params = kwargs["model"].copy()
-        del self.train_params["params"]
-
-        self.model_params = kwargs["model"]["params"]["unet_config"].copy()
-        self.model_params['learn_sigma'] = self.diffusion_params['learn_sigma']
-        self.train_data_params = kwargs["data"]["train"].copy()
-        self.val_data_params = kwargs["data"]["val"].copy()
-        self.test_data_params = kwargs["data"]["test"].copy()
-
-        if self.train_data_params["style_dir"]:
-            self.model_params['style_average'] = True
+        # Content Encoder
+        if model_params["use_content_encoder"]:
+            raise NotImplementedError("Content Encoder is not implemented yet")
         else:
-            self.model_params['style_average'] = False
-        self.model = create_model(**self.model_params)
-        self.diffusion = create_gaussian_diffusion(**self.diffusion_params)
+            content_encoder_params = None
+        
+        # Train data params
+        train_data_params = kwargs["data"]["train"].copy()
+        train_data_params["image_size"] = model_params["image_size"]
 
-        self.schedule_sampler = create_named_schedule_sampler(self.train_params["schedule_sampler"], self.diffusion)
-        hyper_parameters = dict()
-        hyper_parameters.update(self.model_params)
-        hyper_parameters.update(self.diffusion_params)
-        hyper_parameters.update(self.train_params)
-        self.save_hyperparameters(hyper_parameters)
-        self.iter_style_vector = False
-        #
+        # Val data params
+        val_data_params = kwargs["data"]["val"].copy()
+        val_data_params["image_size"] = model_params["image_size"]
+        
+        # Test data params
+        test_data_params = kwargs["data"]["test"].copy()
+        test_data_params["image_size"] = model_params["image_size"]
+
+        return misc,diffusion_params, model_params,schedule_sampler_params,style_encoder_params,content_encoder_params, train_data_params, val_data_params, test_data_params
+    def _generate_style_vector(self,data_params):
+        style_dir = data_params["data_dir"].split('/')[-1]+"_style"
+        style_dir = os.path.join(self.path,style_dir)
+        data_params["style_dir"] = style_dir
+        if not os.path.exists(style_dir):
+            os.mkdir(style_dir)
+            train_src_dir = data_params["data_dir"]
+            styles = os.listdir(train_src_dir)
+            self.style_encoder = self.style_encoder.to(torch.device("cuda:0"))
+            style_num = len(styles)
+            with tqdm.tqdm(total=style_num) as pbar:
+                for style in styles:
+                    style_path = os.path.join(train_src_dir,style)
+                    available_characters_with_ext_raw = os.listdir(style_path)
+                    ##
+                    available_characters_with_ext = []
+                    with open (data_params["char_set"],'r') as f:
+                        seen_char = json.load(f)
+                    for char_withext in available_characters_with_ext_raw:
+                        char = os.path.splitext(char_withext)[0]
+                        if char in seen_char:
+                            available_characters_with_ext.append(char_withext)
+                    
+                    ##
+                    misc = []
+                    for image in available_characters_with_ext:
+                        misc.append(Image.open(os.path.join(style_path, image)))
+                    sty_emb_tmp = []
+                    for image in misc:
+                        image = resize_image(image,128).unsqueeze(0).to("cuda:0")
+                        #sty_emb_tmp.extend(style_encoder(image)[1].detach())
+                        sty_emb_tmp.extend(self.style_encoder(image).detach())
+                    sty_emb_tmp = torch.stack(sty_emb_tmp).squeeze()
+                    mu = torch.mean(sty_emb_tmp,dim=0)
+                    std = torch.std(sty_emb_tmp,dim = 0)
+                    new = []
+                    for pt in sty_emb_tmp:
+                        if torch.norm(pt-mu) < torch.norm(std)*1:
+                            new.append(pt)
+                    print(len(new))
+                    new = torch.stack(new).squeeze()
+                    style_emb = torch.mean(new,dim=0)
+                    torch.save(style_emb,os.path.join(style_dir,f"{style}.pt"))
+                    pbar.update(1)
+                #encodings = torch.stack(encodings).cpu().squeeze()
+    
+    def __init__(self, hyper_parameters,path):
+        super().__init__()
+        self.path = path
+        self.train_params,diffusion_params, model_params,schedule_sampler_params,style_encoder_params,content_encoder_params, self.train_data_params, self.val_data_params, self.test_data_params = self._prepare_hyperparams(hyper_parameters)
+
+        self.diffusion = create_gaussian_diffusion(**diffusion_params)
+        self.style_encoder = create_style_encoder(**style_encoder_params)
+        self.schedule_sampler = create_named_schedule_sampler(schedule_sampler_params, self.diffusion)         
+        self.model = create_model(**model_params)
+
+        self._generate_style_vector(self.train_data_params)
+        self._generate_style_vector(self.val_data_params)
+        self._generate_style_vector(self.test_data_params)
+
     def forward(self, micro_batch, t,micro_cond):
 
         compute_losses = functools.partial(
@@ -77,19 +141,13 @@ class DiffusionModel(pl.LightningModule):
             model_kwargs=micro_cond
             )
         losses = compute_losses()
-        return losses
+        return losses        
+        
     def training_step(self, batch, batch_idx):
-        if not hasattr(self,'path'):
-            self.path = self.trainer.ckpt_path
-            #f"lightning_logs/version_{self.logger.version}"
-        if self.iter_style_vector:
-            for param in self.model.parameters():
-                param.requires_grad = False
         img_batch, cond_batch = batch
         img_batch = img_batch.to(self.device)
         cond_batch = {key: value.to(self.device) for key, value in cond_batch.items()}
         
-
         t, weights = self.schedule_sampler.sample(self.train_data_params['batch_size'], self.device)
         
         losses = self.forward(img_batch, t, cond_batch)
@@ -102,7 +160,7 @@ class DiffusionModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         if self.local_rank == 0:
             if not hasattr(self,'path'):
-                self.path = f"lightning_logs/version_{self.logger.version}"
+                self.path = self.logger.log_dir
             if not hasattr(self,'eval_diffusion'):
                 self.eval_diffusion_params = self.diffusion_params.copy()
                 self.eval_diffusion_params["timestep_respacing"] = "128"
@@ -169,28 +227,13 @@ class DiffusionModel(pl.LightningModule):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.train_params['lr'])
         return optimizer
     def train_dataloader(self):
-        if self.iter_style_vector:
-            data = load_data(
-            image_size = self.model_params["image_size"],
-            **self.test_data_params,
-            )
-        else:
-            data = load_data(
-            image_size = self.model_params["image_size"],
-            **self.train_data_params    
-            )
+        data = load_data(**self.train_data_params)
         return data
     def val_dataloader(self) -> EVAL_DATALOADERS:
-        data = load_data(
-        image_size = self.model_params["image_size"],
-        **self.val_data_params    
-        )
+        data = load_data(**self.val_data_params)
         return data
     def test_dataloader(self) -> EVAL_DATALOADERS:
-        data = load_data(
-        image_size = self.model_params["image_size"],
-        **self.test_data_params    
-        )
+        data = load_data(**self.test_data_params)
         return data
 
 def log_images(generated_images:torch.Tensor,gt_images:torch.Tensor,path:str):

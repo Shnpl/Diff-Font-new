@@ -78,7 +78,6 @@ def create_model(
     num_channels,
     num_res_blocks,
     learn_sigma,
-    class_cond,
     style_avg_pool,
     use_checkpoint,
     attention_resolutions,
@@ -91,7 +90,6 @@ def create_model(
     use_spatial_transformer = False,
     transformer_depth = -1,
     use_seqential_feature = False,
-    pretrained_dict = None,
     style_average = False
 ):
     if image_size == 256:
@@ -116,7 +114,6 @@ def create_model(
         dropout=dropout,
         style_avg_pool=style_avg_pool,
         channel_mult=channel_mult,
-        num_classes=(NUM_CLASSES if class_cond else None),
         use_checkpoint=use_checkpoint,
         num_heads=num_heads,
         num_heads_upsample=num_heads_upsample,
@@ -128,34 +125,34 @@ def create_model(
         use_seqential_feature = use_seqential_feature,
         style_average = style_average
     )
-    model_dict = model.state_dict()
-    if not style_average or use_content_encoder:
-        pretrained_dict = torch.load(pretrained_dict,map_location='cpu')
-    if not style_average:
-        # Load pretrained_style_encoder_dict
-        pretrained_style_encoder_dict = pretrained_dict['netStyleEncoder']
-        pretrained_style_encoder_dict = {k: v for k, v in pretrained_style_encoder_dict.items() if 'style_encoder.' + k in model_dict}
-        style_encoder_dict = {}
-        for k, v in pretrained_style_encoder_dict.items():
-            style_encoder_dict.update({'style_encoder.' + k: v})
-        model_dict.update(style_encoder_dict)
+    #model_dict = model.state_dict()
+    # if not style_average or use_content_encoder:
+    #     pretrained_dict = torch.load(pretrained_dict,map_location='cpu')
+    # if not style_average:
+    #     # Load pretrained_style_encoder_dict
+    #     pretrained_style_encoder_dict = pretrained_dict['netStyleEncoder']
+    #     pretrained_style_encoder_dict = {k: v for k, v in pretrained_style_encoder_dict.items() if 'style_encoder.' + k in model_dict}
+    #     style_encoder_dict = {}
+    #     for k, v in pretrained_style_encoder_dict.items():
+    #         style_encoder_dict.update({'style_encoder.' + k: v})
+    #     model_dict.update(style_encoder_dict)
     
-    #Load pretrained_content_encoder_dict
-    if use_content_encoder:
-        pretrained_content_encoder_dict = pretrained_dict["netContentEncoder"]
-        pretrained_content_encoder_dict = {k: v for k, v in pretrained_content_encoder_dict.items() if 'content_emb.' + k in model_dict}
-        content_encoder_dict = {}
-        for k, v in pretrained_content_encoder_dict.items():
-            content_encoder_dict.update({'content_emb.' + k: v})
-        model_dict.update(content_encoder_dict)
+    # #Load pretrained_content_encoder_dict
+    # if use_content_encoder:
+    #     pretrained_content_encoder_dict = pretrained_dict["netContentEncoder"]
+    #     pretrained_content_encoder_dict = {k: v for k, v in pretrained_content_encoder_dict.items() if 'content_emb.' + k in model_dict}
+    #     content_encoder_dict = {}
+    #     for k, v in pretrained_content_encoder_dict.items():
+    #         content_encoder_dict.update({'content_emb.' + k: v})
+    #     model_dict.update(content_encoder_dict)
     
-    model.load_state_dict(model_dict)
-    if not style_average:
-        for param in model.style_encoder.parameters():
-            param.requires_grad = False
-    if use_content_encoder:
-        for param in model.content_emb.parameters():
-            param.requires_grad = False
+    #model.load_state_dict(model_dict)
+    # if not style_average:
+    #     for param in model.style_encoder.parameters():
+    #         param.requires_grad = False
+    # if use_content_encoder:
+    #     for param in model.content_emb.parameters():
+    #         param.requires_grad = False
     return model
 
 

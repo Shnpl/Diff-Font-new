@@ -15,27 +15,21 @@ from improved_diffusion.diffusion_model_pl import DiffusionModel
 
 if __name__ == "__main__":
     # init params
-    device_num = 4
-    devices = [0,1,2,3]
-    log_dir = "lightning_logs/diffusion"
-    name = "diffusion_resnet50"
-
+    exp_dir = "lightning_logs/diffusion/diffusion_resnet50_new"
     # real batchsize = batchsize*device_num*grad_accumulate_num = 32*3*2 = 192
-    with open(os.path.join(log_dir,name,'train_params.json'),'r') as f:
-        hyper_parameters = json.load(f)
-        # hyper_parameters["data"]["train"]["batch_size"] = batchsize
+    with open(os.path.join(exp_dir,'hyperparams.json'),'r') as f:
+        hyperparams = json.load(f)
     # init model and trainer
-    logger = pl_loggers.CSVLogger(log_dir,name=name)
     trainer = pl.Trainer(accumulate_grad_batches=4,
                         max_steps=-1,
                         precision='16-mixed',
                         log_every_n_steps=1,
-                        devices=devices,
+                        default_root_dir=exp_dir,
+                        devices=hyperparams['misc']['devices'],
                         val_check_interval=800,
                         limit_val_batches=1,
-                        num_sanity_val_steps=0,
-                        logger=logger
+                        num_sanity_val_steps=0
                         )
-    model = DiffusionModel(hyper_parameters)
+    model = DiffusionModel(hyperparams,exp_dir)
     trainer.fit(model)
-    #trainer.test(model,ckpt_path="lightning_logs/version_0/checkpoints/epoch=20800.ckpt")
+    #trainer.test(model)

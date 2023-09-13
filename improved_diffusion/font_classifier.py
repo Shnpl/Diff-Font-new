@@ -16,7 +16,21 @@ import pytorch_lightning as pl
 from pytorch_lightning.core import LightningModule
 
 from improved_diffusion.image_datasets import ImageDataset
-
+def create_style_encoder(model_type,ckpt_path=None):
+    if model_type == "resnet18":
+        style_encoder = FontClassifier_resnet18(use_fc=False)
+    elif model_type == "resnet50":
+        style_encoder = FontClassifier_resnet50(use_fc=False)
+    state_dict = torch.load(ckpt_path)['state_dict']
+    new_state_dict = {}
+    for key in state_dict.keys():
+        new_state_dict[key.replace("model.","")] = state_dict[key]
+    style_encoder.load_state_dict(new_state_dict)
+    for param in style_encoder.parameters():
+        param.requires_grad = False
+    style_encoder =  style_encoder.eval()
+    return style_encoder
+    
 class FontClassifier_LitModel(LightningModule):
     def __init__(self,model_type='resnet50',data_type='800'):
         super().__init__()
